@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Unit test / coverage reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# weBot specific runtime artifacts, screenshots, and logs
+artifacts/runtime/
+artifacts/screenshots/
+artifacts/traces/
+artifacts/reports/
+logs/

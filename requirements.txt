@@ -1,0 +1,7 @@
+playwright
+ollama
+fastapi
+pydantic
+python-dotenv
+pytest
+structlog
