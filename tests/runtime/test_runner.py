@@ -350,10 +350,12 @@ class RuntimeTestRunner:
                 llm_available=llm_available,
                 degraded_mode=degraded_mode,
             )
-            infra_failure = (not llm_available) and bool(history)
-            metrics["infra_failure"] = infra_failure
-
             success = self._is_success(case, status, completion_confidence)
+            # Only treat LLM unavailability as an infra failure when the workflow
+            # itself did not succeed — degraded_mode_rate / llm_available_rate
+            # already capture the LLM-down signal without penalising good runs.
+            infra_failure = (not llm_available) and bool(history) and not success
+            metrics["infra_failure"] = infra_failure
             trace.finalize(status=self._normalize_trace_status(status), termination_reason=termination_reason)
 
         except Exception as exc:  # noqa: BLE001
