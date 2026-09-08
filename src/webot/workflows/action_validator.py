@@ -221,6 +221,96 @@ class ActionValidator:
             "details": {"text_length": len(text)},
         }
 
+    async def _check_submit_signals(self, page: Page, pre_url: str) -> bool:
+        """Check multiple post-submit signals in sequence, returning True as soon as any passes."""
+        logger = get_logger(__name__)
+
+        # 1. URL or hash changed after submit — compare page.url before and
+        #    after a short wait (500ms). Any change = success.
+        try:
+            if hasattr(page, "wait_for_timeout"):
+                await page.wait_for_timeout(500)
+            else:
+                await asyncio.sleep(0.5)
+
+            curr_url = getattr(page, "url", "")
+            if callable(curr_url):
+                curr_url = curr_url()
+            current_url = str(curr_url or "").strip()
+            previous_url = str(pre_url or "").strip()
+            if previous_url and current_url and previous_url != current_url:
+                logger.info(
+                    "submit_signal_url_changed",
+                    extra={"signal": "url_changed", "pre_url": previous_url, "current_url": current_url},
+                )
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 2. Modal/dialog visible with text matching (case-insensitive):
+        #    "thanks", "success", "submitted", "confirmed", "thank you"
+        #    Selectors to try: [role="dialog"], .modal, #modal, .popup
+        modal_selectors = ['[role="dialog"]', ".modal", "#modal", ".popup"]
+        modal_tokens = ("thanks", "success", "submitted", "confirmed", "thank you")
+        for selector in modal_selectors:
+            try:
+                element = await page.wait_for_selector(selector, state="visible", timeout=2000)
+                if element is not None:
+                    text = ""
+                    try:
+                        locator = page.locator(selector)
+                        if hasattr(locator, "first"):
+                            locator = locator.first
+                        text = (await locator.inner_text() or "").lower()
+                    except Exception:
+                        if hasattr(element, "inner_text"):
+                            text = (await element.inner_text() or "").lower()
+
+                    if any(token in text for token in modal_tokens):
+                        logger.info(
+                            "submit_signal_modal_visible",
+                            extra={"signal": "modal_text_match", "selector": selector, "matched_text": text[:100]},
+                        )
+                        return True
+            except Exception:  # noqa: BLE001
+                continue
+
+        # 3. Toast or alert element visible:
+        #    Selectors: [role="alert"], .toast, .alert-success, .swal2-popup
+        toast_selectors = ['[role="alert"]', ".toast", ".alert-success", ".swal2-popup"]
+        for selector in toast_selectors:
+            try:
+                element = await page.wait_for_selector(selector, state="visible", timeout=2000)
+                if element is not None:
+                    logger.info(
+                        "submit_signal_toast_visible",
+                        extra={"signal": "toast_visible", "selector": selector},
+                    )
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+
+        # 4. Form is now hidden or all its inputs are disabled:
+        #    Check: form:not([style*="display:none"]) input:not([disabled])
+        #    If count == 0, treat as success.
+        try:
+            inputs_locator = page.locator('form:not([style*="display:none"]) input:not([disabled])')
+            count = await inputs_locator.count()
+            if count == 0:
+                logger.info(
+                    "submit_signal_form_hidden_or_disabled",
+                    extra={"signal": "form_hidden_or_disabled", "count": count},
+                )
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+
+        logger.warning(
+            "no_submit_signal_detected",
+            extra={"pre_url": pre_url},
+        )
+        return False
+
     async def _validate_submit(
         self,
         *,
@@ -234,16 +324,21 @@ class ActionValidator:
         current_url = str(after.get("url", ""))
         navigation_occurred = self._url_changed(previous_url, current_url)
         dom_changed = self._safe_int(after.get("dom_count"), default=-1) != self._safe_int((before_state or {}).get("dom_count"), default=-1)
-        success = navigation_occurred or dom_changed
+
+        signals_passed = await self._check_submit_signals(page=page, pre_url=previous_url)
+        validation_passed = navigation_occurred or dom_changed or signals_passed
+
         return {
-            "success": success,
-            "reason": "submit_validated" if success else "submit_no_observable_change",
+            "success": validation_passed,
+            "reason": "submit_validated" if validation_passed else "submit_no_observable_change",
             "details": {
                 "selector": selector,
                 "previous_url": previous_url,
                 "current_url": current_url,
                 "navigation_occurred": navigation_occurred,
                 "dom_changed": dom_changed,
+                "signals_passed": signals_passed,
+                "validation_passed": validation_passed,
             },
         }
 
