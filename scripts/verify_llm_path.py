@@ -13,17 +13,29 @@ from pathlib import Path
 # Make webot importable when run directly from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from webot.config.settings import resolve_ollama_config_sources, settings
 from webot.llm.ollama_client import OllamaClient
 from webot.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _PROBE_PROMPT = 'Return JSON: {"action":"goto","url":"https://example.com"}'
-_PROBE_MODEL = "llama3"
+_PROBE_MODEL = "qwen2.5:3b"
 
 
 def main() -> int:
-    client = OllamaClient()
+    ollama_info = resolve_ollama_config_sources(settings)
+    client = OllamaClient(
+        base_url=ollama_info["base_url"],
+        model=ollama_info["model"],
+        timeout_seconds=float(settings.ollama.timeout_seconds),
+        max_retries=2,
+        retry_delay_seconds=0.5,
+        model_source=ollama_info["model_source"],
+        base_url_source=ollama_info["base_url_source"],
+    )
+    print(f"    base_url : {ollama_info['base_url']}  (source: {ollama_info['base_url_source']})")
+    print(f"    model    : {ollama_info['model']}  (source: {ollama_info['model_source']})")
 
     # -- Step 1: availability check ----------------------------------------
     available = client.is_available(force_refresh=True)
