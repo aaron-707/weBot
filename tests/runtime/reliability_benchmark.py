@@ -147,6 +147,15 @@ async def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             min_completion_confidence=0.55,
             expected_status={"completed", "max_steps_reached"},
         ),
+        WorkflowTestCase(
+            name="bench_search_wikipedia",
+            workflow_type="wikipedia",
+            goal="Open Wikipedia and search for Python programming",
+            start_url="https://www.wikipedia.org",
+            max_steps=10,
+            min_completion_confidence=0.50,
+            expected_status={"completed", "max_steps_reached"},
+        ),
     ]
 
     per_workflow_results: dict[str, list[WorkflowTestResult]] = {t.workflow_type: [] for t in templates}

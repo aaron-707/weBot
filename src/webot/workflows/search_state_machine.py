@@ -35,6 +35,7 @@ class SearchStateMachine:
     _provider_started_at: float = 0.0
     _provider_metrics: list[dict[str, Any]] = field(default_factory=list)
     _attempted_submit_button: bool = False
+    _target_provider: str = ""
 
     def next_action(
         self,
@@ -48,6 +49,12 @@ class SearchStateMachine:
             return None
         self._query = self._query or self._extract_query(user_goal) or "query"
 
+        if not self._target_provider:
+            if self._is_wikipedia_context(current_url=current_url, user_goal=user_goal):
+                self._target_provider = "wikipedia"
+            else:
+                self._target_provider = "duckduckgo"
+
         if self._state == SearchState.START:
             self._provider_started_at = perf_counter()
             self._transition(SearchState.OPEN_PROVIDER)
@@ -55,7 +62,10 @@ class SearchStateMachine:
             self._transition(SearchState.DETECT_SEARCH_BOX, completed=True)
             return {"action": "goto", "url": self._provider()["url"]}
         if self._state == SearchState.DETECT_SEARCH_BOX:
-            selector = self._find_search_input(dom_state)
+            if self._target_provider == "wikipedia":
+                selector = "#searchInput"
+            else:
+                selector = self._find_search_input(dom_state)
             if not selector:
                 return self._rotate_or_fail("search_box_not_found")
             self._search_selector = selector
@@ -85,14 +95,17 @@ class SearchStateMachine:
                 return self._rotate_or_fail("results_page_not_detected")
         if self._state == SearchState.EXTRACT_RESULTS:
             self._transition(SearchState.VALIDATE_RESULTS, completed=True)
-            return {"action": "extract_text", "selector": "body"}
+            extract_selector = "#mw-content-text" if self._target_provider == "wikipedia" else "body"
+            return {"action": "extract_text", "selector": extract_selector}
         if self._state == SearchState.VALIDATE_RESULTS:
             if self._results_valid(current_url, recent_actions):
                 self._record_metric(success=True, confidence=0.95, reason="validated")
                 self._transition(SearchState.COMPLETED, completed=True)
-                return {"action": "extract_text", "selector": "body"}
+                extract_selector = "#mw-content-text" if self._target_provider == "wikipedia" else "body"
+                return {"action": "extract_text", "selector": extract_selector}
             return self._rotate_or_fail("search_validation_failed")
-        return {"action": "extract_text", "selector": "body"}
+        extract_selector = "#mw-content-text" if self._target_provider == "wikipedia" else "body"
+        return {"action": "extract_text", "selector": extract_selector}
 
     def should_allow_extract_termination(self) -> bool:
         return self._state == SearchState.COMPLETED
@@ -183,9 +196,14 @@ class SearchStateMachine:
         return ""
 
     @staticmethod
+    def _is_wikipedia_context(*, current_url: str, user_goal: str) -> bool:
+        combined = f"{user_goal} {current_url}".lower()
+        return "wikipedia" in combined or "wiki" in current_url.lower()
+
+    @staticmethod
     def _looks_like_results_page(dom_state: dict[str, list[DomElement]], current_url: str) -> bool:
         lowered = current_url.lower()
-        return len(dom_state.get("links", [])) >= 5 or "q=" in lowered or "/search" in lowered
+        return len(dom_state.get("links", [])) >= 5 or "q=" in lowered or "/search" in lowered or "wiki" in lowered
 
     @staticmethod
     def _looks_like_anti_bot(current_url: str) -> bool:
@@ -196,10 +214,13 @@ class SearchStateMachine:
     def _results_valid(current_url: str, recent_actions: list[dict[str, Any]]) -> bool:
         extracted = any(item.get("action") == "extract_text" and item.get("status") == "success" for item in recent_actions[-5:])
         lowered = current_url.lower()
-        return extracted and ("search" in lowered or "q=" in lowered)
+        return extracted and ("search" in lowered or "q=" in lowered or "wiki" in lowered or "wikipedia" in lowered)
 
-    @staticmethod
-    def _providers() -> list[dict[str, str]]:
+    def _providers(self) -> list[dict[str, str]]:
+        if self._target_provider == "wikipedia":
+            return [
+                {"name": "wikipedia", "url": "https://www.wikipedia.org"},
+            ]
         return [
             {"name": "duckduckgo", "url": "https://duckduckgo.com"},
             {"name": "bing", "url": "https://www.bing.com"},

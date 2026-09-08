@@ -32,7 +32,7 @@ from webot.workflows.progress_tracker import ProgressTracker
 from webot.workflows.recovery_engine import RecoveryEngine
 
 
-WorkflowType = Literal["search", "form_fill", "login"]
+WorkflowType = Literal["search", "form_fill", "login", "wikipedia"]
 
 
 class RuntimeMetrics(TypedDict):

@@ -6,7 +6,7 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse
 
 
-WorkflowType = Literal["search", "form_fill", "login"]
+WorkflowType = Literal["search", "form_fill", "login", "wikipedia"]
 
 
 class WorkflowValidationResult(TypedDict):
@@ -38,7 +38,7 @@ class ResultValidator:
 
     def validate(self, data: WorkflowValidationInput) -> WorkflowValidationResult:
         workflow_type = str(data.get("workflow_type", "")).strip()
-        if workflow_type == "search":
+        if workflow_type in {"search", "wikipedia"}:
             return self._validate_search(data)
         if workflow_type == "form_fill":
             return self._validate_form(data)
@@ -178,7 +178,7 @@ class ResultValidator:
 
     @staticmethod
     def _search_results_appeared(*, text: str, url: str) -> bool:
-        url_hit = any(token in url for token in ["/search", "q=", "bing.com/search", "duckduckgo.com/"])
+        url_hit = any(token in url for token in ["/search", "q=", "bing.com/search", "duckduckgo.com/", "wiki", "wikipedia.org"])
         text_hit = any(
             token in text
             for token in ["results", "showing", "top stories", "people also ask", "about ", "seconds)"]

@@ -75,6 +75,7 @@ class TaskInterpreter:
         "demoqa": "demoqa.com/automation-practice-form",
         "the-internet": "the-internet.herokuapp.com/login",
         "herokuapp": "the-internet.herokuapp.com/login",
+        "wikipedia": "wikipedia.org",
     }
 
     def _extract_domain_hint(self, instruction: str) -> str | None:
