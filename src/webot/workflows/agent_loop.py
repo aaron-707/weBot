@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypedDict
 from urllib.parse import quote_plus
 
@@ -72,6 +72,8 @@ class AgentLoop:
     search_state_machine: SearchStateMachine | None = None
     form_state_machine: FormStateMachine | None = None
     login_state_machine: LoginStateMachine | None = None
+    _fill_streak_reset: bool = field(default=False, init=False, repr=False)
+    _last_pivot_selector: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.search_state_machine is None:
@@ -140,17 +142,52 @@ class AgentLoop:
             )
             logger.info("agent_loop_step_selected", extra={"step": step, "action": action})
 
-            pivot_action = await self._maybe_pivot_repeated_fill(
-                history=history,
-                dom_state=current_dom,
-                proposed_action=action,
-                step=step,
-            )
-            if pivot_action is not None:
-                action = pivot_action
-
             guard_termination = self._check_loop_guards(history=history, next_action=action)
             if guard_termination is not None:
+                if guard_termination == "fill_loop_guard_triggered":
+                    if await self._attempt_fill_loop_pivot():
+                        selector_used = getattr(self, "_last_pivot_selector", None) or "submit_pivot"
+                        history.append(
+                            {
+                                "step": step,
+                                "action": {"action": "click", "selector": selector_used},
+                                "success": True,
+                                "reason": "fill_loop_pivot_submit",
+                                "error": "",
+                                "data": None,
+                                "validation": {"success": True, "reason": "fill_loop_pivot"},
+                                "recovery": {},
+                                "dom_delta": {},
+                                "interstitial_type": "",
+                                "anti_bot_detected": False,
+                            }
+                        )
+                        if self.session_memory is not None:
+                            self.session_memory.add_action("click", selector_used, "success", None)
+                        step += 1
+                        continue
+
+                    extract_action: Action = {"action": "extract_text", "selector": "body"}
+                    try:
+                        exec_result = await self.action_executor.execute(extract_action)
+                        if isinstance(exec_result, dict) and exec_result.get("data"):
+                            final_data = exec_result.get("data")
+                    except Exception:
+                        pass
+                    if final_data is None and hasattr(self.page, "inner_text"):
+                        try:
+                            final_data = await self.page.inner_text("body")
+                        except Exception:
+                            pass
+                    logger.info("fill_loop_pivot_extract_fallback", extra={"step": step})
+                    return self._build_result(
+                        status="failed",
+                        steps_executed=step - 1,
+                        history=history,
+                        final_data=final_data,
+                        error="fill_loop_exhausted_pivots",
+                    )
+
                 logger.warning("loop_guard_triggered", extra={"step": step, "reason": guard_termination})
                 return self._build_result(
                     status="blocked_by_anti_bot" if "anti_bot" in guard_termination else "failed",
@@ -169,6 +206,7 @@ class AgentLoop:
                 action=action,
                 before_state=before_state,
             )
+            self._fill_streak_reset = False
 
             success = bool(execution_result.get("success", False)) and bool(validation_result.get("success", False))
             reason = str(validation_result.get("reason", ""))
@@ -735,13 +773,45 @@ class AgentLoop:
             )
             return {"action": "click", "selector": search_button}
 
-        logger.warning(
-            "fill_loop_guard_triggered",
-            extra={"step": step, "reason": "no_submission_path"},
-        )
         return {"action": "extract_text", "selector": "body"}
 
+    async def _attempt_fill_loop_pivot(self) -> bool:
+        logger = get_logger(__name__)
+        submit_selectors = (
+            "button[type=submit]",
+            "input[type=submit]",
+            "[role=button][aria-label*=submit i]",
+            "button.submit",
+            "#submit",
+            ".btn-submit",
+        )
+        for sel in submit_selectors:
+            try:
+                locator = self.page.locator(sel).first
+                is_vis = False
+                try:
+                    is_vis = bool(await locator.is_visible(timeout=1000))
+                except TypeError:
+                    is_vis = bool(await locator.is_visible())
+                except Exception:
+                    is_vis = False
+
+                if is_vis:
+                    try:
+                        await locator.click(timeout=1000)
+                    except TypeError:
+                        await locator.click()
+                    logger.info("fill_loop_pivot_submit_clicked", extra={"selector": sel})
+                    self._fill_streak_reset = True
+                    self._last_pivot_selector = sel
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _identical_fill_streak(self, history: list[StepRecord]) -> int:
+        if getattr(self, "_fill_streak_reset", False):
+            return 0
         streak = 0
         expected_sig = ""
         for entry in reversed(history):
