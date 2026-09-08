@@ -52,14 +52,29 @@ from webot.workflows.task_interpreter import TaskInterpreter
 async def run_prompt(prompt: str, *, headless: bool = False, max_steps: int = 10) -> dict[str, Any]:
     """Resolve a starting URL from `prompt`, then run AgentLoop against it."""
     logger = get_logger(__name__)
-    interpreter = TaskInterpreter()
+
+    ollama_info = resolve_ollama_config_sources(settings)
+    ollama_client = OllamaClient(
+        base_url=ollama_info["base_url"],
+        model=ollama_info["model"],
+        timeout_seconds=float(settings.ollama.timeout_seconds),
+        max_retries=2,
+        retry_delay_seconds=0.5,
+        model_source=ollama_info["model_source"],
+        base_url_source=ollama_info["base_url_source"],
+    )
+    llm_available = ollama_client.is_available()
+    decision_engine = DecisionEngine(ollama_client=ollama_client)
+
+    interpreter = TaskInterpreter(decision_engine=decision_engine)
     start_url = interpreter.extract_start_url(prompt)
     if not start_url:
         raise ValueError(
             "Could not determine a starting site from the prompt. "
-            "Mention a URL or a known site name, e.g. "
-            "\"search for python internships on duckduckgo\" or "
-            "\"open https://example.com and ...\"."
+            "Mention a URL or a site name, e.g. "
+            "\"search for python internships on duckduckgo\", "
+            "\"open https://example.com and ...\", or "
+            "\"look up developer documentation on stripe\"."
         )
 
     browser = BrowserController(headless=headless)
@@ -71,18 +86,6 @@ async def run_prompt(prompt: str, *, headless: bool = False, max_steps: int = 10
         logger.info("navigating", extra={"url": start_url})
         await browser.goto(start_url)
 
-        ollama_info = resolve_ollama_config_sources(settings)
-        ollama_client = OllamaClient(
-            base_url=ollama_info["base_url"],
-            model=ollama_info["model"],
-            timeout_seconds=float(settings.ollama.timeout_seconds),
-            max_retries=2,
-            retry_delay_seconds=0.5,
-            model_source=ollama_info["model_source"],
-            base_url_source=ollama_info["base_url_source"],
-        )
-        llm_available = ollama_client.is_available()
-
         dom_extractor = DomExtractor()
         session_memory = SessionMemory(max_actions=400)
         action_executor = ActionExecutor(browser_controller=browser, max_retries=2, retry_delay_seconds=0.5)
@@ -91,7 +94,6 @@ async def run_prompt(prompt: str, *, headless: bool = False, max_steps: int = 10
         recovery_engine = RecoveryEngine(max_retries=2, llm_client=ollama_client)
         progress_tracker = ProgressTracker(window_size=20)
         goal_evaluator = GoalEvaluator(llm_client=ollama_client)
-        decision_engine = DecisionEngine(ollama_client=ollama_client)
 
         agent_loop = AgentLoop(
             page=browser.page,
