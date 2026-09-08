@@ -72,9 +72,9 @@ class TaskInterpreter:
         "google": "google.com",
         "github": "github.com",
         "duckduckgo": "duckduckgo.com",
-        "demoqa": "demoqa.com",
-        "the-internet": "the-internet.herokuapp.com",
-        "herokuapp": "the-internet.herokuapp.com",
+        "demoqa": "demoqa.com/automation-practice-form",
+        "the-internet": "the-internet.herokuapp.com/login",
+        "herokuapp": "the-internet.herokuapp.com/login",
     }
 
     def _extract_domain_hint(self, instruction: str) -> str | None:
@@ -88,7 +88,16 @@ class TaskInterpreter:
         for pattern in patterns:
             match = re.search(pattern, instruction, flags=re.IGNORECASE)
             if match:
-                return match.group(1).lower()
+                captured = match.group(1).lower()
+                # If the regex only captured the bare hostname but _NAMED_SITES
+                # has a more-specific value for that host (i.e. includes a path),
+                # prefer the full path-aware value so callers land on the correct
+                # page rather than the site root.
+                for domain in self._NAMED_SITES.values():
+                    host = domain.split("/")[0]
+                    if host == captured and "/" in domain:
+                        return domain
+                return captured
 
         # Fall back to a bare mention of a known site name anywhere in the
         # instruction (no trigger word required) — site names are distinctive
