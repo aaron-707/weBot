@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import ClassVar, Literal, TypedDict
 from urllib.parse import urlparse
 
 
@@ -65,29 +65,52 @@ class TaskInterpreter:
             return candidate
         return None
 
-    @staticmethod
-    def _extract_domain_hint(instruction: str) -> str | None:
+    #: Known-name -> domain lookup. Extend as new target sites are added to
+    #: the search/form/login state machines or runtime test suite.
+    _NAMED_SITES: ClassVar[dict[str, str]] = {
+        "linkedin": "linkedin.com",
+        "google": "google.com",
+        "github": "github.com",
+        "duckduckgo": "duckduckgo.com",
+        "demoqa": "demoqa.com",
+        "the-internet": "the-internet.herokuapp.com",
+        "herokuapp": "the-internet.herokuapp.com",
+    }
+
+    def _extract_domain_hint(self, instruction: str) -> str | None:
         patterns = [
             r"\bopen\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
-            r"\bgo to\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
-            r"\bnavigate to\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
+            r"\bgo(?:es)?\s+to\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
+            r"\bnavigate\s+to\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
+            r"\b(?:log\s*in|sign\s+in|login)\s+to\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
+            r"\bon\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b",
         ]
         for pattern in patterns:
             match = re.search(pattern, instruction, flags=re.IGNORECASE)
             if match:
                 return match.group(1).lower()
 
-        named_sites: dict[str, str] = {
-            "linkedin": "linkedin.com",
-            "google": "google.com",
-            "github": "github.com",
-        }
+        # Fall back to a bare mention of a known site name anywhere in the
+        # instruction (no trigger word required) — site names are distinctive
+        # enough that this rarely false-positives, and it covers phrasing
+        # like "Fill DemoQA practice form fields" with no "open"/"on".
         lowered = instruction.lower()
-        for key, domain in named_sites.items():
-            if key in lowered and any(word in lowered for word in ["open", "go to", "navigate"]):
+        for key, domain in self._NAMED_SITES.items():
+            if key in lowered:
                 return domain
 
         return None
+
+    def extract_start_url(self, instruction: str) -> str | None:
+        """Public helper: best-effort starting URL for a free-text prompt.
+
+        Returns None when no explicit URL or recognizable site name is
+        present in the instruction — callers should treat that as
+        "ask the user for a starting point" rather than guessing.
+        """
+        normalized = self._normalize(instruction)
+        action = self._extract_goto_action(normalized)
+        return action["url"] if action else None
 
     @staticmethod
     def _extract_search_action(instruction: str) -> BrowserAction | None:
