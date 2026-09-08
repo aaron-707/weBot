@@ -112,11 +112,19 @@ class GoalEvaluator:
         if anti_bot:
             confidence -= 0.45
 
+        confidence = self._clamp(confidence)
+
+        # Deterministic floor: long extracted text combined with a results-
+        # bearing DOM bucket is strong evidence that a search completed.
+        has_result_bucket = any("result" in k.lower() for k in dom_summary)
+        if len(extracted_text) > 200 and has_result_bucket:
+            confidence = max(confidence, 0.75)
+
         done = confidence >= 0.70
         next_action = {"action": "extract_text", "selector": "body"} if done else {"action": "click", "selector": "button[type='submit'], button[aria-label*='Search']"}
 
         return {
-            "completion_confidence": self._clamp(confidence),
+            "completion_confidence": confidence,
             "completion_reason": "blocked_by_anti_bot" if anti_bot else ("search_results_detected" if done else "search_results_not_clear"),
             "recommended_next_action": next_action,
             "should_terminate": done or anti_bot,
@@ -254,6 +262,13 @@ class GoalEvaluator:
             confidence += 0.05
 
         confidence = self._clamp(confidence)
+
+        # Deterministic floor: a post-auth URL is unambiguous evidence of
+        # successful login regardless of extracted_text content.
+        post_auth_url_strong = any(token in url for token in ["/secure", "dashboard", "welcome"])
+        if post_auth_url_strong:
+            confidence = max(confidence, 0.85)
+
         done = confidence >= 0.72 and not auth_negative
 
         return {
