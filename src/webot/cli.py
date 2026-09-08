@@ -27,13 +27,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+from webot.browser.controller import BrowserController
 from webot.config.settings import resolve_ollama_config_sources, settings
 from webot.intelligence.dom_extractor import DomExtractor
 from webot.intelligence.dom_delta import DomDelta
@@ -48,60 +47,6 @@ from webot.workflows.goal_evaluator import GoalEvaluator
 from webot.workflows.progress_tracker import ProgressTracker
 from webot.workflows.recovery_engine import RecoveryEngine
 from webot.workflows.task_interpreter import TaskInterpreter
-
-
-class BrowserController:
-    """Minimal Playwright lifecycle wrapper (mirrors main.py / runtime tests)."""
-
-    def __init__(self, headless: bool = False) -> None:
-        self.headless = headless
-        self._playwright: Playwright | None = None
-        self._browser: Browser | None = None
-        self._context: BrowserContext | None = None
-        self._page: Page | None = None
-
-    @property
-    def page(self) -> Page:
-        if self._page is None:
-            raise RuntimeError("Browser not initialized. Call open() first.")
-        return self._page
-
-    async def open(self) -> None:
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
-        self._context = await self._browser.new_context(user_agent=settings.browser.user_agent)
-        self._page = await self._context.new_page()
-        self._page.set_default_timeout(settings.browser.timeout_ms)
-        self._page.set_default_navigation_timeout(settings.browser.navigation_timeout_ms)
-
-    async def goto(self, url: str) -> None:
-        await self.page.goto(url, wait_until="domcontentloaded")
-
-    async def click(self, selector: str) -> None:
-        await self.page.click(selector)
-
-    async def fill(self, selector: str, value: str) -> None:
-        await self.page.fill(selector, value)
-
-    async def extract_text(self, selector: str) -> str:
-        return (await self.page.locator(selector).first.inner_text()).strip()
-
-    async def close(self) -> None:
-        errors: list[str] = []
-        for closer, label in (
-            (self._context.close if self._context else None, "context"),
-            (self._browser.close if self._browser else None, "browser"),
-            (self._playwright.stop if self._playwright else None, "playwright"),
-        ):
-            if closer is None:
-                continue
-            try:
-                await closer()
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{label}: {exc}")
-        self._context = self._browser = self._playwright = self._page = None
-        if errors:
-            raise RuntimeError("; ".join(errors))
 
 
 async def run_prompt(prompt: str, *, headless: bool = False, max_steps: int = 10) -> dict[str, Any]:
