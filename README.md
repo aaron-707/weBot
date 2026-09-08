@@ -232,11 +232,48 @@ Transitions:
 - execution duration
 
 ### 7.5 Current Reliability Snapshot (Latest Measured)
-Source: `artifacts/runtime/benchmark/reliability_benchmark_report.json` (iterations=5, generated `2026-09-08T06:39:12Z`).
 
-> **Degraded-mode caveat:** All runs below were measured with Ollama unavailable (`llm_available_rate: 0.0`, `degraded_mode_rate: 1.0`). These numbers reflect the deterministic fallback path only — the LLM-assisted decision path (DecisionEngine / GoalEvaluator) has not yet been exercised under benchmark conditions.
+#### A. LLM-Assisted Decision Path (Ollama Live: `qwen2.5:3b`)
+Source: `artifacts/runtime/benchmark/reliability_benchmark_report.json` (iterations=5, 20 total runs, generated `2026-09-08T11:19:07Z`).
+Health status: `llm_available_rate: 1.0`, `degraded_mode_rate: 0.0`, `overall_success_rate: 1.00`.
 
-Search:
+Search (DuckDuckGo, provider: `duckduckgo`):
+- success_rate: `1.00`
+- average_steps: `5.0`
+- average_retries: `0.0`
+- anti_bot_detection_rate: `0.0`
+- average_completion_confidence: `0.8183`
+- average_runtime_seconds: `15.124`
+
+Form fill (DemoQA, provider: `demoqa`):
+- success_rate: `1.00`
+- average_steps: `6.0`
+- average_retries: `0.0`
+- anti_bot_detection_rate: `0.0`
+- average_completion_confidence: `0.8946`
+- average_runtime_seconds: `5.862`
+
+Login (The Internet, provider: `the_internet`):
+- success_rate: `1.00`
+- average_steps: `4.0`
+- average_retries: `0.0`
+- anti_bot_detection_rate: `0.0`
+- average_completion_confidence: `0.8104`
+- average_runtime_seconds: `7.234`
+
+Search (Wikipedia, provider: `wikipedia`):
+- success_rate: `1.00`
+- average_steps: `5.0`
+- average_retries: `0.0`
+- anti_bot_detection_rate: `0.0`
+- average_completion_confidence: `0.9192`
+- average_runtime_seconds: `7.198`
+
+#### B. Degraded-Mode Baseline (Ollama Unavailable)
+Source: Baseline benchmark run (iterations=5, generated `2026-09-08T06:39:12Z`).
+Health status: `llm_available_rate: 0.0`, `degraded_mode_rate: 1.0` (deterministic fallback path only).
+
+Search (DuckDuckGo):
 - success_rate: `1.00`
 - average_steps: `5.0`
 - average_retries: `0.0`
@@ -244,7 +281,7 @@ Search:
 - average_completion_confidence: `0.8183`
 - average_runtime_seconds: `6.484`
 
-Form fill:
+Form fill (DemoQA):
 - success_rate: `1.00`
 - average_steps: `6.0`
 - average_retries: `0.0`
@@ -252,7 +289,7 @@ Form fill:
 - average_completion_confidence: `0.95136`
 - average_runtime_seconds: `7.7572`
 
-Login:
+Login (The Internet):
 - success_rate: `1.00`
 - average_steps: `4.0`
 - average_retries: `0.0`
@@ -282,6 +319,7 @@ This allows meaningful reliability testing of deterministic automation paths.
 - `docs/DEGRADED_MODE_ANALYSIS.md`
 - `docs/SEARCH_STABILIZATION_REPORT.md`
 - `docs/SEARCH_CONFIDENCE_REGRESSION_ANALYSIS.md`
+- `docs/LLM_PATH_VALIDATION_ANALYSIS.md`
 
 These documents capture evidence-based QA/reliability cycles and bottleneck analysis.
 
@@ -331,17 +369,19 @@ Observed successful search sequence:
 Completed:
 - Modular workflow engine with typed action execution/validation/recovery.
 - Runtime trace/report pipeline with benchmark harness.
-- Degraded-mode deterministic fallback and LLM availability handling.
+- Degraded-mode deterministic fallback and LLM availability handling across both live and offline states.
+- LLM-assisted decision path and ambiguous-state evaluation verified against live Ollama (`tests/runtime/test_llm_ambiguous_path.py`) and wired into standard pytest suite.
+- Anti-bot and interstitial detection verified against genuine Cloudflare/captcha/Access-Denied fixtures and live browser challenges (`tests/test_anti_bot_detection.py`), proving high-precision discrimination between true blocks and benign text.
+- Provider-level metrics propagation into aggregate benchmark summaries and JSON reports.
 
 Partial:
-- Search confidence calibration under benchmark conditions.
-- Provider-level search metrics integration into aggregate benchmark scoring.
+- Search confidence calibration during intermediate query submission steps.
 - Alignment between workflow success signals and benchmark success accounting.
 
 Future Work:
-- Refine GoalEvaluator anti-bot confidence logic.
+- Implement bounded recovery pivots for anti-bot interstitials (back-off delays, session persistence, mirror endpoints) before terminating.
+- Tighten search-state intermediate confidence mapping to prevent unnecessary ambiguous dips.
 - Improve benchmark scoring semantics for degraded-mode passes.
-- Tighten search-state completion confidence mapping.
 
 ### 10.2 Engineering Concepts Demonstrated (Resume Talking Points)
 - Deterministic-first autonomous browser orchestration.
@@ -352,14 +392,12 @@ Future Work:
 - Bounded retry/recovery and loop-guard safety mechanisms for autonomous agents.
 
 ## 11. Known Limitations
-- Anti-bot and interstitial behavior varies by provider and time.
-- LLM-assisted decision path (DecisionEngine / GoalEvaluator LLM consult) not yet validated — all measured runs to date have been in deterministic degraded mode.
-- Provider metrics propagation into benchmark summaries is incomplete.
-
+- Anti-bot recovery is currently observational: when genuine challenges or access restrictions occur, the system accurately detects them and terminates with `blocked_by_anti_bot`, but does not attempt interactive captcha solving or proxy rotation.
+- Standard benchmark workflows intentionally resolve deterministically via domain state machines; non-deterministic LLM decision pathways require ambiguous task prompts or unfamiliar layouts (`tests/runtime/test_llm_ambiguous_path.py`) to actively engage.
 
 ## 12. Immediate Next Priorities
-1. Validate LLM-assisted decision path (run benchmarks with Ollama available).
-2. Improve provider metrics propagation into benchmark summaries.
+1. Develop bounded recovery strategies for anti-bot interstitials (exponential back-off, alternative endpoint pivoting) prior to hitting termination thresholds.
+2. Calibrate search-state machine intermediate confidence mapping to avoid artificial ambiguity dips during query submission.
 3. Continue short, evidence-driven QA loops with localized changes only.
 
 

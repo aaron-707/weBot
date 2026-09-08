@@ -76,6 +76,8 @@ class WorkflowTestResult:
     degraded_mode: bool
     infra_failure: bool
     error: str = ""
+    provider: str = ""
+    provider_metrics: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -340,7 +342,10 @@ class RuntimeTestRunner:
                     url=browser.page.url,
                 )
 
-            await browser.page.screenshot(path=str(screenshot_path), full_page=True)
+            try:
+                await browser.page.screenshot(path=str(screenshot_path), timeout=5000)
+            except Exception:
+                pass
 
             metrics = self._compute_metrics(
                 history=history,
@@ -359,10 +364,12 @@ class RuntimeTestRunner:
             trace.finalize(status=self._normalize_trace_status(status), termination_reason=termination_reason)
 
         except Exception as exc:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
             success = False
             status = "failed"
             error_message = str(exc)
-            termination_reason = termination_reason or "runner_exception"
+            termination_reason = termination_reason or f"runner_exception: {error_message}"
             infra_failure = "ollama" in error_message.lower() and "unavailable" in error_message.lower()
             metrics["infra_failure"] = infra_failure
             metrics["execution_duration_seconds"] = round(perf_counter() - t0, 3)
@@ -381,6 +388,46 @@ class RuntimeTestRunner:
         trace_path = trace.export_trace(trace_dir / f"{trace.trace_id}.json")
         ended_at = datetime.now(timezone.utc).isoformat()
 
+        prov_metrics: list[dict[str, Any]] = []
+        try:
+            if agent_loop is not None and getattr(agent_loop, "search_state_machine", None) is not None:
+                prov_metrics = list(agent_loop.search_state_machine.provider_metrics())
+        except Exception:
+            pass
+
+        provider_name = ""
+        if prov_metrics:
+            provider_name = str(prov_metrics[0].get("provider", ""))
+        if not provider_name:
+            if case.workflow_type == "search":
+                if "duckduckgo" in case.start_url or "duckduckgo" in case.name:
+                    provider_name = "duckduckgo"
+                elif "wikipedia" in case.start_url or "wikipedia" in case.name:
+                    provider_name = "wikipedia"
+                else:
+                    provider_name = "duckduckgo"
+            elif case.workflow_type == "wikipedia":
+                provider_name = "wikipedia"
+            elif case.workflow_type == "form_fill":
+                provider_name = "demoqa"
+            elif case.workflow_type == "login":
+                provider_name = "the_internet"
+            else:
+                provider_name = case.workflow_type
+
+        if not prov_metrics and provider_name:
+            prov_metrics = [
+                {
+                    "provider": provider_name,
+                    "success": success,
+                    "completion_confidence": round(completion_confidence, 4),
+                    "anti_bot_detections": int(metrics.get("anti_bot_detections", 0)),
+                    "retries": int(metrics.get("retries", 0)),
+                    "duration_seconds": float(metrics.get("execution_duration_seconds", 0.0)),
+                    "reason": termination_reason,
+                }
+            ]
+
         return WorkflowTestResult(
             name=case.name,
             workflow_type=case.workflow_type,
@@ -397,6 +444,8 @@ class RuntimeTestRunner:
             degraded_mode=degraded_mode,
             infra_failure=infra_failure,
             error=error_message,
+            provider=provider_name,
+            provider_metrics=prov_metrics,
         )
 
     async def run_suite(self, suite_name: str, cases: list[WorkflowTestCase]) -> SuiteReport:

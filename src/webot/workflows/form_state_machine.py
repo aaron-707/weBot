@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 from typing import Any
 
 from webot.intelligence.dom_extractor import DomElement
@@ -90,7 +91,9 @@ class FormStateMachine:
     @staticmethod
     def _is_form_goal(goal: str) -> bool:
         lowered = goal.lower()
-        return any(token in lowered for token in ("form", "fill", "submit", "apply"))
+        if any(token in lowered for token in ("fill", "submit", "apply")):
+            return True
+        return bool(re.search(r"\bform\b", lowered))
 
     @staticmethod
     def _find_required_fields(dom_state: dict[str, list[DomElement]]) -> list[str]:

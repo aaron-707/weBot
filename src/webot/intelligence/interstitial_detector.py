@@ -8,12 +8,15 @@ from urllib.parse import urlparse
 
 DetectionType = Literal["anti_bot", "captcha", "login_wall", "cookie_wall", "access_denied", "none"]
 
+HIGH_CONFIDENCE_THRESHOLD: float = 0.70
 
-class InterstitialDetection(TypedDict):
+
+class InterstitialDetection(TypedDict, total=False):
     detection_type: DetectionType
     confidence: float
     matched_signals: list[str]
     recommended_action: str
+    is_transient: bool
 
 
 @dataclass(slots=True)
@@ -30,6 +33,11 @@ class InterstitialDetector:
         )
         if "/sorry/" in parsed_path:
             anti_bot_signals.append("url:/sorry/")
+
+        rate_limit_signals = self._match_signals(
+            hay,
+            ["too many requests", "rate limit", "temporarily unavailable", "please slow down"],
+        )
 
         access_denied_signals = self._match_signals(
             hay,
@@ -48,6 +56,14 @@ class InterstitialDetector:
 
         if anti_bot_signals:
             return self._build("anti_bot", anti_bot_signals, "pivot_away_from_direct_navigation")
+        if rate_limit_signals:
+            return {
+                "detection_type": "anti_bot",
+                "confidence": 0.60,
+                "matched_signals": rate_limit_signals,
+                "recommended_action": "transient_backoff_retry",
+                "is_transient": True,
+            }
         if access_denied_signals:
             return self._build("access_denied", access_denied_signals, "terminate_or_change_target")
         if login_wall_signals:
@@ -60,6 +76,7 @@ class InterstitialDetector:
             "confidence": 0.0,
             "matched_signals": [],
             "recommended_action": "continue",
+            "is_transient": False,
         }
 
     @staticmethod
@@ -73,9 +90,11 @@ class InterstitialDetector:
     @staticmethod
     def _build(det_type: DetectionType, signals: list[str], recommendation: str) -> InterstitialDetection:
         confidence = min(1.0, 0.55 + 0.12 * len(signals))
+        is_transient = (det_type in {"anti_bot", "captcha", "access_denied"}) and (confidence < HIGH_CONFIDENCE_THRESHOLD)
         return {
             "detection_type": det_type,
             "confidence": confidence,
             "matched_signals": signals,
             "recommended_action": recommendation,
+            "is_transient": is_transient,
         }

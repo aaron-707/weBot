@@ -93,13 +93,23 @@ class ActionExecutor:
                 }
             except Exception as exc:  # noqa: BLE001
                 last_error = str(exc)
-                self._logger.exception(
-                    "action_execution_failed",
-                    action=action_name,
-                    attempt=attempts,
-                    max_retries=self.max_retries,
-                    error=last_error,
-                )
+                safe_error = last_error.encode("ascii", errors="replace").decode("ascii")
+                try:
+                    self._logger.exception(
+                        "action_execution_failed",
+                        action=action_name,
+                        attempt=attempts,
+                        max_retries=self.max_retries,
+                        error=safe_error,
+                    )
+                except UnicodeEncodeError:
+                    self._logger.warning(
+                        "action_execution_failed",
+                        action=action_name,
+                        attempt=attempts,
+                        max_retries=self.max_retries,
+                        error=safe_error,
+                    )
 
                 if attempts > self.max_retries:
                     break

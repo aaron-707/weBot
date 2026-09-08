@@ -6,6 +6,11 @@ from typing import ClassVar, Literal, TypedDict
 from urllib.parse import urlparse
 
 
+from webot.llm.decision_engine import DecisionEngine, DomElement
+from webot.utils.logger import get_logger
+from webot.utils.url_safety import is_safe_web_url
+
+
 ActionType = Literal["goto", "search", "click", "fill", "extract_text"]
 
 
@@ -21,7 +26,15 @@ class BrowserAction(TypedDict, total=False):
 class TaskInterpreter:
     """Converts natural language instructions into structured browser actions."""
 
-    def interpret(self, instruction: str) -> list[BrowserAction]:
+    decision_engine: DecisionEngine | None = None
+    llm_consulted_count: int = 0
+    deterministic_interpret_count: int = 0
+
+    def interpret(
+        self,
+        instruction: str,
+        dom_summary: list[DomElement] | None = None,
+    ) -> list[BrowserAction]:
         if not isinstance(instruction, str) or not instruction.strip():
             raise ValueError("instruction must be a non-empty string")
 
@@ -36,7 +49,30 @@ class TaskInterpreter:
         if search_action:
             actions.append(search_action)
 
-        return actions
+        if actions:
+            self.deterministic_interpret_count += 1
+            return actions
+
+        # Deterministic parsing found no supported actions.
+        # Fall back to LLM reasoning if DecisionEngine is configured.
+        if self.decision_engine is not None:
+            logger = get_logger(__name__)
+            self.llm_consulted_count += 1
+            logger.info("task_interpreter_llm_consulted", extra={"instruction": instruction})
+            llm_actions = self.decision_engine.propose_action_sequence(
+                user_goal=instruction,
+                elements=dom_summary,
+            )
+            converted: list[BrowserAction] = []
+            for act in llm_actions:
+                if isinstance(act, dict):
+                    action_type = act.get("action")
+                    if action_type in {"goto", "search", "click", "fill", "extract_text"}:
+                        converted.append(dict(act))  # type: ignore[arg-type]
+            if converted:
+                return converted
+
+        return []
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -49,7 +85,9 @@ class TaskInterpreter:
 
         domain = self._extract_domain_hint(instruction)
         if domain:
-            return {"action": "goto", "url": f"https://{domain}"}
+            candidate = f"https://{domain}"
+            if is_safe_web_url(candidate):
+                return {"action": "goto", "url": candidate}
 
         return None
 
@@ -60,8 +98,7 @@ class TaskInterpreter:
             return None
 
         candidate = match.group(0).rstrip(".,)")
-        parsed = urlparse(candidate)
-        if parsed.scheme in {"http", "https"} and parsed.netloc:
+        if is_safe_web_url(candidate):
             return candidate
         return None
 
@@ -114,13 +151,24 @@ class TaskInterpreter:
     def extract_start_url(self, instruction: str) -> str | None:
         """Public helper: best-effort starting URL for a free-text prompt.
 
-        Returns None when no explicit URL or recognizable site name is
-        present in the instruction — callers should treat that as
-        "ask the user for a starting point" rather than guessing.
+        Returns deterministic URL if present in instruction or known site name.
+        Falls back to DecisionEngine.infer_start_url if DecisionEngine is provided.
+        Returns None when no start URL can be deduced.
         """
         normalized = self._normalize(instruction)
         action = self._extract_goto_action(normalized)
-        return action["url"] if action else None
+        if action and action.get("url"):
+            return action["url"]
+
+        if self.decision_engine is not None:
+            logger = get_logger(__name__)
+            self.llm_consulted_count += 1
+            logger.info("task_interpreter_start_url_llm_consulted", extra={"instruction": instruction})
+            inferred = self.decision_engine.infer_start_url(instruction)
+            if inferred and is_safe_web_url(inferred):
+                return inferred
+
+        return None
 
     @staticmethod
     def _extract_search_action(instruction: str) -> BrowserAction | None:

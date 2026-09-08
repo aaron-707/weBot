@@ -30,6 +30,8 @@ class GoalEvaluator:
     llm_client: LlmLike | None = None
     ambiguous_low: float = 0.40
     ambiguous_high: float = 0.65
+    llm_fallback_calls: int = 0
+    llm_fallback_skipped: int = 0
 
     def evaluate(
         self,
@@ -63,6 +65,7 @@ class GoalEvaluator:
         adjusted = self._adjust_with_progress(result, progress_report)
 
         if self._is_ambiguous(adjusted["completion_confidence"]) and self.llm_client is not None:
+            self.llm_fallback_calls += 1
             fallback = self._llm_fallback(
                 user_goal=goal,
                 current_url=current_url,
@@ -74,6 +77,8 @@ class GoalEvaluator:
             )
             if fallback is not None:
                 adjusted = fallback
+        else:
+            self.llm_fallback_skipped += 1
 
         adjusted["task_type"] = task_type
         adjusted["summary"] = self._compact_summary(adjusted)
@@ -429,7 +434,7 @@ class GoalEvaluator:
             return "search"
         if any(k in lowered for k in ["login", "log in", "sign in", "authenticate"]):
             return "login"
-        if any(k in lowered for k in ["fill", "apply", "submit form", "form"]):
+        if any(k in lowered for k in ["fill", "apply", "submit form"]) or bool(re.search(r"\bform\b", lowered)):
             return "form_fill"
         if any(k in lowered for k in ["extract", "scrape", "get text", "collect"]):
             return "extraction"

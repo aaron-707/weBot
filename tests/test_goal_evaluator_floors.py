@@ -1,4 +1,4 @@
-﻿"""Unit tests for GoalEvaluator deterministic confidence floors.
+"""Unit tests for GoalEvaluator deterministic confidence floors.
 
 Covers:
 - _evaluate_login: post-auth URL (/secure, dashboard, welcome) raises
@@ -16,6 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from webot.workflows.form_state_machine import FormStateMachine
 from webot.workflows.goal_evaluator import GoalEvaluator
 
 _EMPTY_PROGRESS: dict = {
@@ -121,3 +122,41 @@ def test_search_no_floor_with_short_text() -> None:
     assert result["completion_confidence"] < 0.75, (
         f"Expected < 0.75 with short text, got {result['completion_confidence']:.4f}"
     )
+
+
+# -- Form goal word boundary classification tests ------------------------------
+
+@pytest.mark.parametrize("goal", [
+    "Review the platform documentation",
+    "Perform the automated check",
+    "Check the format of the file",
+    "Follow the uniform guidelines",
+    "Transform the input data",
+    "Provide informed consent",
+    "Open the information page",
+])
+def test_non_form_goals_do_not_classify_as_form_fill(goal: str) -> None:
+    """Goals containing 'form' as a substring must NOT classify as form_fill."""
+    assert GoalEvaluator._infer_task_type(goal) != "form_fill", (
+        f"Goal '{goal}' should not infer task_type as form_fill"
+    )
+    assert not FormStateMachine._is_form_goal(goal), (
+        f"Goal '{goal}' should not be detected as form goal by FormStateMachine"
+    )
+
+
+@pytest.mark.parametrize("goal", [
+    "fill out the form",
+    "submit the application form",
+    "Fill the registration form",
+    "Please submit form with details",
+])
+def test_genuine_form_goals_classify_as_form_fill(goal: str) -> None:
+    """Genuine form goals with word-bounded 'form' or fill/submit must classify as form_fill."""
+    assert GoalEvaluator._infer_task_type(goal) == "form_fill", (
+        f"Goal '{goal}' should infer task_type as form_fill"
+    )
+    assert FormStateMachine._is_form_goal(goal), (
+        f"Goal '{goal}' should be detected as form goal by FormStateMachine"
+    )
+

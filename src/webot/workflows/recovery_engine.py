@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TypedDict
@@ -48,6 +49,7 @@ class RecoveryEngine:
         retry_count: int = 0,
         candidate_selectors: list[str] | None = None,
         elements: list[dict[str, Any]] | None = None,
+        interstitial: dict[str, Any] | None = None,
     ) -> RecoveryResult:
         logger = get_logger(__name__)
         logger.info(
@@ -83,10 +85,34 @@ class RecoveryEngine:
                 candidate_selectors=candidate_selectors or [],
             )
         if error_type == "anti_bot_blocked":
+            is_transient = False
+            if isinstance(interstitial, dict):
+                is_transient = bool(interstitial.get("is_transient", False))
+                if not is_transient and float(interstitial.get("confidence", 1.0) or 1.0) < 0.70:
+                    is_transient = True
+
+            lowered_msg = error_message.lower()
+            if any(k in lowered_msg for k in ("too many requests", "rate limit", "temporarily unavailable", "slow down")):
+                is_transient = True
+
+            if is_transient and retry_count == 0:
+                logger.info(
+                    "anti_bot_transient_backoff_started",
+                    extra={"retry_count": retry_count, "failed_action": failed_action},
+                )
+                await asyncio.sleep(1.5)
+                logger.info("anti_bot_transient_backoff_completed", extra={"action": failed_action})
+                return {
+                    "recovered": True,
+                    "strategy": "transient_backoff_retry",
+                    "next_action": dict(failed_action),
+                    "details": "Borderline/transient anti-bot signal detected; performed single bounded backoff-and-retry",
+                }
+
             return {
                 "recovered": False,
                 "strategy": "stop_no_retry",
-                "details": "Anti-bot/interstitial detected; avoid retry storm",
+                "details": "Confirmed anti-bot/interstitial detected; halting immediately without evasion",
             }
         if error_type == "fill_loop_stagnation":
             return {

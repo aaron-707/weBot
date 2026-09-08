@@ -326,6 +326,11 @@ class AgentLoop:
         retry_key = f"{action.get('action', '')}:{action.get('selector', '')}"
         retry_count = self.session_memory.retry_counts.get(retry_key, 0)
 
+        interstitial_info = None
+        details = validation_result.get("details", {})
+        if isinstance(details, dict):
+            interstitial_info = details.get("interstitial")
+
         recovery = await self.recovery_engine.recover(
             page=self.page,
             error_type=error_type,
@@ -333,6 +338,7 @@ class AgentLoop:
             error_message=str(execution_result.get("error", "") or validation_result.get("reason", "")),
             retry_count=retry_count,
             candidate_selectors=self._candidate_selectors_from_validation(validation_result),
+            interstitial=interstitial_info if isinstance(interstitial_info, dict) else None,
         )
 
         if not recovery.get("recovered") or not isinstance(recovery.get("next_action"), dict):
@@ -396,6 +402,7 @@ class AgentLoop:
         try:
             suggested = self.decision_engine.choose_next_action(compact_goal, flattened)
             normalized = self._normalize_action(suggested)
+            get_logger(__name__).info("strategy_pivot", extra={"step": step, "strategy": "decision_engine", "action": normalized})
             if normalized.get("action") == "extract_text":
                 self.degraded_mode = True
                 get_logger(__name__).warning("deterministic_fallback_mode", extra={"step": step, "reason": "llm_unavailable"})

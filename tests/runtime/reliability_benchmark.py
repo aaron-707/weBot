@@ -59,6 +59,7 @@ def _result_to_metrics(result: WorkflowTestResult) -> dict[str, float]:
 def terminal_summary_table(report: dict[str, Any]) -> str:
     headers = [
         "Workflow",
+        "Provider",
         "Runs",
         "SuccessRate",
         "AvgSteps",
@@ -77,6 +78,7 @@ def terminal_summary_table(report: dict[str, Any]) -> str:
             " | ".join(
                 [
                     wf["workflow"],
+                    str(wf.get("provider", wf["workflow"])),
                     str(wf["runs"]),
                     f"{wf['success_rate']:.2%}",
                     f"{wf['average_steps']:.2f}",
@@ -193,9 +195,15 @@ async def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         recovery_success_runs = int(sum(x["recovery_success_flag"] for x in metrics))
         anti_bot_runs = int(sum(1 for x in metrics if x["anti_bot_detections"] > 0))
 
+        providers = sorted({getattr(r, "provider", "") for r in results if getattr(r, "provider", "")})
+        provider_name = ", ".join(providers) if providers else wf
+        all_prov_metrics = [pm for r in results for pm in getattr(r, "provider_metrics", [])]
+
         workflow_reports.append(
             {
                 "workflow": wf,
+                "provider": provider_name,
+                "provider_metrics": all_prov_metrics,
                 "runs": runs,
                 "success_rate": _rate(successes, runs),
                 "average_steps": _safe_mean([x["steps"] for x in metrics]),

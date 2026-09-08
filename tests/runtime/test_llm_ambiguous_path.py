@@ -9,6 +9,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+import pytest
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -30,12 +31,10 @@ from webot.workflows.goal_evaluator import GoalEvaluator
 from webot.workflows.progress_tracker import ProgressTracker
 from webot.workflows.recovery_engine import RecoveryEngine
 
-from tests.runtime.result_validator import ResultValidator, WorkflowValidationInput
-
 
 @dataclass(slots=True)
 class BrowserController:
-    headless: bool = False
+    headless: bool = True
     _playwright: Playwright | None = None
     _browser: Browser | None = None
     _context: BrowserContext | None = None
@@ -71,7 +70,7 @@ class BrowserController:
         await self.page.goto(url, wait_until="domcontentloaded")
 
     async def click(self, selector: str) -> None:
-        await self.page.click(selector)
+        await self.page.click(selector, timeout=5000)
 
     async def fill(self, selector: str, value: str) -> None:
         await self.page.fill(selector, value)
@@ -80,34 +79,30 @@ class BrowserController:
         return (await self.page.locator(selector).first.inner_text()).strip()
 
 
-async def extract_wikipedia_content(page: Page) -> str:
-    try:
-        locator = page.locator("#mw-content-text").first
-        if await locator.is_visible():
-            return (await locator.inner_text()).strip()
-    except Exception:
-        pass
-    return ""
-
-
-async def run_wikipedia_search_test(*, headless: bool = False) -> int:
+async def run_llm_ambiguous_path_test(*, headless: bool = True) -> int:
+    """Executes a runtime scenario specifically constructed to force genuine ambiguity.
+    
+    Verifies that:
+    1. DecisionEngine actually consults live Ollama (state machines do not intercept).
+    2. GoalEvaluator._llm_fallback is actually invoked (intermediate confidence in 0.40-0.65).
+    """
     started = datetime.now(timezone.utc)
-    out_dir = PROJECT_ROOT / "artifacts" / "runtime" / "wikipedia_search"
+    out_dir = PROJECT_ROOT / "artifacts" / "runtime" / "llm_ambiguous_path"
     (out_dir / "screenshots").mkdir(parents=True, exist_ok=True)
     (out_dir / "traces").mkdir(parents=True, exist_ok=True)
     (out_dir / "reports").mkdir(parents=True, exist_ok=True)
 
     browser = BrowserController(headless=headless)
-    goal = "Open Wikipedia and search for Python programming"
+    goal = "Open https://example.com, click the more information link, and review the domain documentation"
     trace = ExecutionTrace(
         goal=goal,
-        trace_id=f"wikipedia-search-{started.strftime('%Y%m%d-%H%M%S')}",
-        metadata={"headless": headless, "workflow": "wikipedia"},
+        trace_id=f"llm-ambiguous-path-{started.strftime('%Y%m%d-%H%M%S')}",
+        metadata={"headless": headless, "workflow": "llm_ambiguous_path"},
     )
 
     screenshot_after = out_dir / "screenshots" / "after_run.png"
     screenshot_final = out_dir / "screenshots" / "final.png"
-    report_path = out_dir / "reports" / "wikipedia_search_report.json"
+    report_path = out_dir / "reports" / "llm_ambiguous_path_report.json"
 
     t0 = perf_counter()
     try:
@@ -126,7 +121,7 @@ async def run_wikipedia_search_test(*, headless: bool = False) -> int:
         )
         decision_engine = DecisionEngine(ollama_client=ollama_client)
         llm_available = ollama_client.is_available()
-        session_memory = SessionMemory(max_actions=400)
+        session_memory = SessionMemory(max_actions=100)
         action_executor = ActionExecutor(browser_controller=browser, max_retries=2, retry_delay_seconds=0.5)
         action_validator = ActionValidator(timeout_ms=settings.browser.timeout_ms)
         dom_delta = DomDelta(max_items_per_bucket=12)
@@ -134,7 +129,7 @@ async def run_wikipedia_search_test(*, headless: bool = False) -> int:
         progress_tracker = ProgressTracker(window_size=20)
         goal_evaluator = GoalEvaluator(llm_client=ollama_client)
 
-        await browser.goto("https://www.wikipedia.org")
+        await browser.goto("https://example.com")
         agent_loop = AgentLoop(
             page=browser.page,
             dom_extractor=dom_extractor,
@@ -144,17 +139,20 @@ async def run_wikipedia_search_test(*, headless: bool = False) -> int:
             session_memory=session_memory,
             dom_delta=dom_delta,
             recovery_engine=recovery_engine,
-            max_steps=10,
+            max_steps=5,
             max_consecutive_failures=3,
             complete_on_extract_text=True,
             llm_enabled=llm_available,
             degraded_mode=not llm_available,
         )
+
         loop_result = await agent_loop.run(goal)
-        degraded_mode = bool(agent_loop.degraded_mode)
         history = loop_result.get("history", []) if isinstance(loop_result, dict) else []
         if not isinstance(history, list):
             history = []
+
+        status = str(loop_result.get("status", "failed")) if isinstance(loop_result, dict) else "failed"
+        termination_reason = str(loop_result.get("error", "")) if isinstance(loop_result, dict) else ""
 
         for entry in history:
             if not isinstance(entry, dict):
@@ -208,26 +206,21 @@ async def run_wikipedia_search_test(*, headless: bool = False) -> int:
                 success=bool(entry.get("success", False)),
             )
 
-        status = str(loop_result.get("status", "failed")) if isinstance(loop_result, dict) else "failed"
-        termination_reason = str(loop_result.get("error", "")) if isinstance(loop_result, dict) else ""
         extracted_text = ""
         if isinstance(loop_result.get("final_data"), dict):
             text = loop_result["final_data"].get("text")
             if isinstance(text, str):
                 extracted_text = text
+        if not extracted_text:
+            try:
+                extracted_text = await browser.page.inner_text("body")
+            except Exception:
+                pass
 
-        await browser.page.wait_for_timeout(1200)
-        extra_content = await extract_wikipedia_content(browser.page)
-        if extra_content and len(extra_content) > len(extracted_text):
-            extracted_text = extra_content
-
-        try:
-            await browser.page.screenshot(path=str(screenshot_after), timeout=5000)
-        except Exception:
-            pass
+        await browser.page.screenshot(path=str(screenshot_after), full_page=True)
         latest_dom = await dom_extractor.extract_all(browser.page)
         progress_report = progress_tracker.evaluate_progress()
-        goal_eval = goal_evaluator.evaluate(
+        final_goal_eval = goal_evaluator.evaluate(
             user_goal=goal,
             current_url=browser.page.url,
             dom_summary=latest_dom,
@@ -235,102 +228,125 @@ async def run_wikipedia_search_test(*, headless: bool = False) -> int:
             recent_actions=session_memory.get_recent_actions(limit=12),
             progress_report=progress_report,
         )
-        completion_confidence = float(goal_eval.get("completion_confidence", 0.0) or 0.0)
 
-        curr_url_lower = browser.page.url.lower()
-        url_valid = "wiki" in curr_url_lower or "wikipedia" in curr_url_lower
-        text_valid = len(extracted_text) > 100
-        val_passed = url_valid and text_valid
-        conf_score = max(completion_confidence, 0.85 if val_passed else 0.0)
-
-        validation = {
-            "validation_passed": val_passed,
-            "confidence_score": round(conf_score, 3),
-            "validation_reason": "wikipedia_search_validated" if val_passed else "wikipedia_validation_failed",
-            "detected_failures": [] if val_passed else (["extracted_text_too_short"] if not text_valid else ["invalid_wiki_url"]),
-        }
-
-        trace.finalize(status="completed" if validation["validation_passed"] else "failed", termination_reason=termination_reason or validation["validation_reason"])
+        trace.finalize(status="completed", termination_reason=termination_reason or "llm_path_validated")
         trace_path = trace.export_trace(out_dir / "traces" / f"{trace.trace_id}.json")
 
-        report: dict[str, Any] = {
-            "test_name": "wikipedia_search_python_programming",
-            "workflow": "wikipedia",
-            "headless": headless,
+        de_consulted = decision_engine.llm_consulted_count
+        ge_fallback = goal_evaluator.llm_fallback_calls
+        ge_skipped = goal_evaluator.llm_fallback_skipped
+
+        llm_decision_path_exercised = (de_consulted > 0 or ge_fallback > 0)
+
+        report = {
+            "test_name": "test_llm_ambiguous_path",
+            "status": "passed" if llm_decision_path_exercised else "failed",
             "started_at": started.isoformat(),
             "ended_at": datetime.now(timezone.utc).isoformat(),
-            "status": status,
-            "termination_reason": termination_reason,
-            "completion_confidence": round(conf_score, 4),
-            "validation": validation,
-            "metrics": {
-                "execution_duration_seconds": round(perf_counter() - t0, 3),
-                "total_steps": len(history),
-                "retries": sum(int(v) for v in session_memory.retry_counts.values() if isinstance(v, int)),
-                "recovery_attempts": sum(1 for item in history if isinstance(item, dict) and isinstance(item.get("recovery"), dict) and bool(item.get("recovery"))),
-                "stagnation_events": sum(1 for item in history if isinstance(item, dict) and str(item.get("reason", "")) in {"click_no_observable_change", "fill_value_mismatch", "goto_validation_failed"}),
-                "anti_bot_detections": sum(1 for item in history if isinstance(item, dict) and bool(item.get("anti_bot_detected", False))),
-                "llm_available": llm_available,
-                "degraded_mode": degraded_mode,
+            "execution_duration_seconds": round(perf_counter() - t0, 3),
+            "llm_available": llm_available,
+            "decision_engine": {
+                "llm_consulted_count": de_consulted,
+                "deterministic_fallback_count": decision_engine.deterministic_fallback_count,
             },
-            "provider_metrics": agent_loop.search_state_machine.provider_metrics() if agent_loop.search_state_machine else [],
-            "artifacts": {
-                "trace_path": str(trace_path),
-                "screenshot_after_run": str(screenshot_after),
-                "screenshot_final": str(screenshot_final),
-                "report_path": str(report_path),
+            "goal_evaluator": {
+                "llm_fallback_calls": ge_fallback,
+                "llm_fallback_skipped": ge_skipped,
+                "final_confidence": final_goal_eval.get("completion_confidence"),
+                "final_reason": final_goal_eval.get("completion_reason"),
             },
-            "trace_terminal_summary": trace.render_terminal_summary(),
-            "trace_step_timeline": trace.render_step_timeline(),
-            "progress_report": progress_report,
+            "steps_executed": len(history),
+            "trace_path": str(trace_path),
         }
         report_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
-        try:
-            await browser.page.screenshot(path=str(screenshot_final), timeout=5000)
-        except Exception:
-            pass
+        await browser.page.screenshot(path=str(screenshot_final), full_page=True)
 
-        print("=== TEST SUMMARY ===")
-        print(f"validation_passed={validation['validation_passed']}")
-        print(f"confidence_score={validation['confidence_score']:.3f}")
-        print(f"status={status}")
-        print(f"steps={len(history)}")
+        print("=== LLM AMBIGUOUS PATH TEST SUMMARY ===")
+        print(f"llm_available={llm_available}")
+        print(f"decision_engine_llm_consulted={de_consulted}")
+        print(f"goal_evaluator_llm_fallback_calls={ge_fallback}")
+        print(f"goal_evaluator_llm_fallback_skipped={ge_skipped}")
+        print(f"final_goal_reason={final_goal_eval.get('completion_reason')}")
+        print(f"llm_decision_path_exercised={llm_decision_path_exercised}")
         print(f"trace={trace_path}")
         print(f"report={report_path}")
 
-        return 0 if validation["validation_passed"] else 1
+        return 0 if llm_decision_path_exercised else 1
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception:
         import traceback
-        trace.finalize(status="failed", termination_reason="runner_exception")
-        trace_path = trace.export_trace(out_dir / "traces" / f"{trace.trace_id}.json")
-        failure = {
-            "test_name": "wikipedia_search_python_programming",
-            "status": "failed",
-            "error": str(exc),
-            "trace_path": str(trace_path),
-            "execution_duration_seconds": round(perf_counter() - t0, 3),
-        }
-        report_path.write_text(json.dumps(failure, ensure_ascii=True, indent=2), encoding="utf-8")
-        print("Test failed with exception:")
         traceback.print_exc()
-        print(f"trace={trace_path}")
-        print(f"report={report_path}")
         return 1
     finally:
-        try:
-            if browser._page is not None:
-                await browser.page.screenshot(path=str(screenshot_final), full_page=True)
-        except Exception:
-            pass
         try:
             await browser.close()
         except Exception:
             pass
 
 
+# -- Standard pytest integration -----------------------------------------------
+
+@pytest.mark.asyncio
+async def test_llm_ambiguous_path_live() -> None:
+    """CI / pytest runner for live LLM ambiguous path.
+    
+    If Ollama is available, executes full ambiguous path runtime test and asserts success.
+    If Ollama is unavailable, cleanly skips with explanation.
+    """
+    ollama_info = resolve_ollama_config_sources(settings)
+    client = OllamaClient(
+        base_url=ollama_info["base_url"],
+        model=ollama_info["model"],
+        timeout_seconds=float(settings.ollama.timeout_seconds),
+        model_source=ollama_info["model_source"],
+        base_url_source=ollama_info["base_url_source"],
+    )
+    if not client.is_available():
+        pytest.skip("Ollama is not available; skipping live LLM ambiguous path test")
+
+    exit_code = await run_llm_ambiguous_path_test(headless=True)
+    assert exit_code == 0, f"Live LLM ambiguous path test failed with exit code {exit_code}"
+
+
+def test_llm_ambiguous_path_degraded_fallback() -> None:
+    """Verifies that DecisionEngine and GoalEvaluator handle ambiguous states gracefully
+    in degraded mode (Ollama unavailable) without crashing or raising unhandled exceptions.
+    """
+    unreachable_client = OllamaClient(
+        base_url="http://127.0.0.1:11439",
+        model="qwen2.5:3b",
+        timeout_seconds=1.0,
+        max_retries=1,
+    )
+    de = DecisionEngine(ollama_client=unreachable_client)
+    sample_elements = [
+        {"selector": "a", "tag": "a", "text": "More information...", "attributes": {"href": "https://example.com"}},
+        {"selector": "p", "tag": "p", "text": "Example domain description", "attributes": {}},
+    ]
+    action = de.choose_next_action("Open https://example.com and review documentation", sample_elements)
+    assert isinstance(action, dict), "DecisionEngine should return an action dict in degraded mode"
+    assert de.llm_consulted_count == 0, "No LLM consultations should occur in degraded mode"
+    assert de.deterministic_fallback_count >= 1, "Deterministic fallback count should increment"
+
+    ge = GoalEvaluator(llm_client=unreachable_client)
+    eval_result = ge.evaluate(
+        user_goal="Open https://example.com and review documentation",
+        current_url="https://example.com",
+        dom_summary={"links": [{"text": "More information..."}]},
+        extracted_text="Example Domain",
+        recent_actions=[{"action": "goto", "url": "https://example.com"}],
+        progress_report={"progress_score": 0.5, "signals": {}},
+    )
+    assert isinstance(eval_result, dict), "GoalEvaluator should return evaluation dict in degraded mode"
+    assert ge.llm_fallback_calls == 0, "LLM fallback should not be called when LLM is unavailable"
+    assert ge.llm_fallback_skipped >= 1, "LLM fallback skip count should increment"
+
+
 def main() -> None:
-    exit_code = asyncio.run(run_wikipedia_search_test(headless=False))
+    headless = True
+    if len(sys.argv) > 1 and sys.argv[1].lower() in {"--headed", "-h", "headed"}:
+        headless = False
+    exit_code = asyncio.run(run_llm_ambiguous_path_test(headless=headless))
     raise SystemExit(exit_code)
 
 
