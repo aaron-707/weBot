@@ -232,31 +232,34 @@ Transitions:
 - execution duration
 
 ### 7.5 Current Reliability Snapshot (Latest Measured)
-Source: `artifacts/runtime/benchmark/reliability_benchmark_report.json` (iterations=5, generated `2026-05-25T07:03:13Z`).
+Source: `artifacts/runtime/benchmark/reliability_benchmark_report.json` (iterations=5, generated `2026-09-08T06:39:12Z`).
+
+> **Degraded-mode caveat:** All runs below were measured with Ollama unavailable (`llm_available_rate: 0.0`, `degraded_mode_rate: 1.0`). These numbers reflect the deterministic fallback path only — the LLM-assisted decision path (DecisionEngine / GoalEvaluator) has not yet been exercised under benchmark conditions.
 
 Search:
-- success_rate: `0.00`
+- success_rate: `1.00`
 - average_steps: `5.0`
 - average_retries: `0.0`
 - anti_bot_detection_rate: `0.0`
-- average_completion_confidence: `0.0731`
-- average_runtime_seconds: `6.8754`
+- average_completion_confidence: `0.8183`
+- average_runtime_seconds: `6.484`
 
 Form fill:
-- success_rate: `0.00`
-- average_steps: `3.0`
+- success_rate: `1.00`
+- average_steps: `6.0`
 - average_retries: `0.0`
 - anti_bot_detection_rate: `0.0`
-- average_completion_confidence: `0.38328`
-- average_runtime_seconds: `6.7930`
+- average_completion_confidence: `0.95136`
+- average_runtime_seconds: `7.7572`
 
 Login:
-- success_rate: `0.00`
-- average_steps: `8.0`
+- success_rate: `1.00`
+- average_steps: `4.0`
 - average_retries: `0.0`
 - anti_bot_detection_rate: `0.0`
-- average_completion_confidence: `0.6701`
-- average_runtime_seconds: `7.6072`
+- average_completion_confidence: `0.7904`
+- average_runtime_seconds: `9.4968`
+
 
 ## 8. Degraded Mode (LLM Unavailable)
 When Ollama is down:
@@ -349,16 +352,16 @@ Future Work:
 - Bounded retry/recovery and loop-guard safety mechanisms for autonomous agents.
 
 ## 11. Known Limitations
-- Search confidence can be under-estimated due to evaluator anti-bot calibration.
-- Benchmark success-rate interpretation can be skewed by infra/degraded accounting choices.
 - Anti-bot and interstitial behavior varies by provider and time.
-- Some state-machine completion confidence paths need tighter alignment with actual successful outcomes.
+- LLM-assisted decision path (DecisionEngine / GoalEvaluator LLM consult) not yet validated — all measured runs to date have been in deterministic degraded mode.
+- Provider metrics propagation into benchmark summaries is incomplete.
+
 
 ## 12. Immediate Next Priorities
-1. Calibrate GoalEvaluator anti-bot criteria to reduce false anti-bot confidence collapse.
-2. Align search confidence with validated extraction success signals.
-3. Improve provider metrics propagation into benchmark summaries.
-4. Continue short, evidence-driven QA loops with localized changes only.
+1. Validate LLM-assisted decision path (run benchmarks with Ollama available).
+2. Improve provider metrics propagation into benchmark summaries.
+3. Continue short, evidence-driven QA loops with localized changes only.
+
 
 ## 13. Setup and Usage
 ### 13.1 Requirements
