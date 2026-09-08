@@ -104,7 +104,9 @@ class GoalEvaluator:
         anti_bot = self._looks_like_anti_bot(url=url, text=text)
 
         confidence = 0.15
-        if any(host in url for host in ["google.", "bing.", "duckduckgo.", "search", "wikipedia.", "wiki"]):
+        target_domain = self._extract_target_domain(goal)
+        target_in_url = bool(target_domain and target_domain.split(".")[0] in url)
+        if any(host in url for host in ["google.", "bing.", "duckduckgo.", "search", "wikipedia.", "wiki"]) or target_in_url:
             confidence += 0.20
         if searched:
             confidence += 0.20

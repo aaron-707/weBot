@@ -4,7 +4,8 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter
-from typing import Any
+from typing import Any, ClassVar
+from urllib.parse import urlparse
 
 from webot.intelligence.dom_extractor import DomElement
 from webot.workflows.action_executor import Action
@@ -26,6 +27,12 @@ class SearchState(str, Enum):
 
 @dataclass(slots=True)
 class SearchStateMachine:
+    SUPPORTED_SEARCH_DOMAINS: ClassVar[tuple[str, ...]] = (
+        "duckduckgo.com",
+        "wikipedia.org",
+        "bing.com",
+    )
+
     progress_tracker: Any | None = None
     goal_evaluator: Any | None = None
     _state: SearchState = SearchState.START
@@ -47,11 +54,15 @@ class SearchStateMachine:
     ) -> Action | None:
         if not self._is_search_goal(user_goal):
             return None
+        if not self._is_supported_provider(current_url=current_url, user_goal=user_goal):
+            return None
         self._query = self._query or self._extract_query(user_goal) or "query"
 
         if not self._target_provider:
             if self._is_wikipedia_context(current_url=current_url, user_goal=user_goal):
                 self._target_provider = "wikipedia"
+            elif self._is_bing_context(current_url=current_url, user_goal=user_goal):
+                self._target_provider = "bing"
             else:
                 self._target_provider = "duckduckgo"
 
@@ -190,10 +201,56 @@ class SearchStateMachine:
             selector = str(item.get("selector", "")).strip()
             text = str(item.get("text", "")).lower()
             attrs = item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {}
-            blob = f"{text} {attrs.get('aria-label','')} {attrs.get('name','')}".lower()
+            blob = f"{selector} {text} {attrs.get('aria-label','')} {attrs.get('name','')}".lower()
+            if any(k in blob for k in ("clear", "reset", "cancel", "dismiss", "close")):
+                continue
             if selector and any(token in blob for token in ("search", "go", "submit")):
                 return selector
         return ""
+
+    @classmethod
+    def _is_supported_provider(cls, *, current_url: str, user_goal: str) -> bool:
+        """Determines if this search should be handled by the search engine state machine.
+
+        Returns False if the browser is already loaded on an external/third-party website
+        (e.g. youtube.com, github.com) or if the goal explicitly specifies an external
+        destination, preventing SearchStateMachine from hijacking third-party sessions to DuckDuckGo.
+        """
+        # 1. If currently loaded on an external page (not blank/data and not a supported search host), don't hijack.
+        if current_url and not current_url.startswith(("about:", "data:")):
+            try:
+                host = (urlparse(current_url).netloc or "").lower().split(":")[0]
+            except Exception:
+                host = ""
+            if host and not any(host == domain or host.endswith("." + domain) for domain in cls.SUPPORTED_SEARCH_DOMAINS):
+                return False
+
+        # 2. If the goal explicitly targets our supported providers, it's supported.
+        lowered = user_goal.lower()
+        if any(p in lowered for p in ("duckduckgo", "wikipedia", "wiki", "bing")):
+            return True
+
+        # 3. If the goal targets an external domain name (e.g. youtube.com, github.com), don't claim it.
+        domain_matches = re.findall(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b", lowered)
+        for dom in domain_matches:
+            if not any(dom == s or dom.endswith("." + s) for s in cls.SUPPORTED_SEARCH_DOMAINS):
+                return False
+
+        # 4. If the goal mentions a known external platform/service name, don't claim it.
+        external_platforms = (
+            "youtube", "github", "reddit", "amazon", "google", "twitter",
+            "linkedin", "instagram", "facebook", "netflix", "spotify", "ebay",
+        )
+        for plat in external_platforms:
+            if re.search(rf"\b{plat}\b", lowered):
+                return False
+
+        return True
+
+    @staticmethod
+    def _is_bing_context(*, current_url: str, user_goal: str) -> bool:
+        combined = f"{user_goal} {current_url}".lower()
+        return "bing" in combined
 
     @staticmethod
     def _is_wikipedia_context(*, current_url: str, user_goal: str) -> bool:
@@ -220,6 +277,11 @@ class SearchStateMachine:
         if self._target_provider == "wikipedia":
             return [
                 {"name": "wikipedia", "url": "https://www.wikipedia.org"},
+            ]
+        if self._target_provider == "bing":
+            return [
+                {"name": "bing", "url": "https://www.bing.com"},
+                {"name": "duckduckgo", "url": "https://duckduckgo.com"},
             ]
         return [
             {"name": "duckduckgo", "url": "https://duckduckgo.com"},

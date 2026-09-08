@@ -105,6 +105,9 @@ class TaskInterpreter:
     #: Known-name -> domain lookup. Extend as new target sites are added to
     #: the search/form/login state machines or runtime test suite.
     _NAMED_SITES: ClassVar[dict[str, str]] = {
+        "youtube": "youtube.com",
+        "reddit": "reddit.com",
+        "amazon": "amazon.com",
         "linkedin": "linkedin.com",
         "google": "google.com",
         "github": "github.com",

@@ -133,6 +133,12 @@ class ActionExecutor:
 
         if action_name == "click":
             await self.browser_controller.click(action["selector"])
+            page = getattr(self.browser_controller, "page", None)
+            if page is not None and any(k in action["selector"].lower() for k in ("search", "submit")):
+                try:
+                    await page.wait_for_timeout(1000)
+                except Exception:
+                    pass
             return {"selector": action["selector"]}
 
         if action_name == "fill":
@@ -153,6 +159,10 @@ class ActionExecutor:
                 await self.browser_controller.click(selector)
             else:
                 await page.locator(selector).first.press("Enter", timeout=1500)
+            try:
+                await page.wait_for_timeout(1000)
+            except Exception:
+                pass
             return {"selector": selector, "method": method}
 
         if action_name == "extract_text":

@@ -382,6 +382,7 @@ class AgentLoop:
             step=step,
             recent_actions=recent_actions,
             failures=failures,
+            current_url=self.page.url,
         )
         if deterministic is not None:
             get_logger(__name__).info("strategy_pivot", extra={"step": step, "strategy": "deterministic", "action": deterministic})
@@ -458,6 +459,7 @@ class AgentLoop:
         step: int,
         recent_actions: list[dict[str, Any]],
         failures: list[dict[str, Any]],
+        current_url: str = "",
     ) -> Action | None:
         lowered_goal = user_goal.lower()
         is_search_task = any(token in lowered_goal for token in ("search", "find", "look up", "query"))
@@ -473,17 +475,32 @@ class AgentLoop:
                 if search_button:
                     return {"action": "click", "selector": search_button}
 
-            # deterministic direct query only before blocked patterns appear
-            if step == 1 and query:
+            # Deterministic direct query only when not already loaded on an external target page.
+            is_blank_url = not current_url or current_url.startswith(("about:", "data:"))
+            is_google_context = "google" in lowered_goal or "google." in current_url.lower()
+            has_external_destination = any(
+                site in lowered_goal for site in ("youtube", "github", "reddit", "amazon", "wikipedia", "duckduckgo", "bing")
+            )
+            if step == 1 and query and (is_google_context or (is_blank_url and not has_external_destination)):
                 return {"action": "goto", "url": f"https://google.com/search?q={quote_plus(query)}"}
 
             if AgentLoop._is_search_homepage(dom_state) and query:
                 search_input = AgentLoop._find_search_input_selector(dom_state)
-                if search_input:
+                already_submitted = any(
+                    isinstance(a, dict) and a.get("action") in {"submit", "click"}
+                    for a in recent_actions
+                )
+                if already_submitted:
+                    return {"action": "extract_text", "selector": "body"}
+
+                last_action = recent_actions[-1] if recent_actions else {}
+                if last_action.get("action") == "fill" and last_action.get("selector") == search_input:
+                    search_button = AgentLoop._find_search_button_selector(dom_state)
+                    if search_button:
+                        return {"action": "click", "selector": search_button}
+                    return {"action": "submit", "selector": search_input, "submit_method": "enter"}
+                if search_input and not any(isinstance(a, dict) and a.get("action") == "fill" for a in recent_actions):
                     return {"action": "fill", "selector": search_input, "value": query}
-                search_button = AgentLoop._find_search_button_selector(dom_state)
-                if search_button:
-                    return {"action": "click", "selector": search_button}
 
         # Step 1 deterministic URL open.
         if step == 1:
@@ -678,7 +695,9 @@ class AgentLoop:
             selector = str(item.get("selector", "")).strip()
             text = str(item.get("text", "")).lower()
             attrs = item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {}
-            blob = f"{text} {attrs.get('aria-label','')} {attrs.get('name','')}".lower()
+            blob = f"{selector} {text} {attrs.get('aria-label','')} {attrs.get('name','')}".lower()
+            if any(k in blob for k in ("clear", "reset", "cancel", "dismiss", "close")):
+                continue
             if selector and any(k in blob for k in ("search", "go", "submit")):
                 return selector
         return None
