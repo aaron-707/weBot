@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TypedDict
 
 from playwright.async_api import Page
 
+from webot.intelligence.selector_builder import SelectorBuilder
 from webot.utils.logger import get_logger
 
 
-ErrorType = Literal["missing_selector", "navigation_failure", "timeout", "anti_bot_blocked", "fill_loop_stagnation"]
+ErrorType = Literal["missing_selector", "selector_failure", "navigation_failure", "timeout", "anti_bot_blocked", "fill_loop_stagnation"]
 
 
 class RecoveryInput(TypedDict, total=False):
@@ -24,6 +25,7 @@ class RecoveryResult(TypedDict, total=False):
     strategy: str
     next_action: dict[str, Any]
     details: str
+    fallback_selector: str
 
 
 class LlmLike(Protocol):
@@ -34,6 +36,7 @@ class LlmLike(Protocol):
 class RecoveryEngine:
     max_retries: int = 2
     llm_client: LlmLike | None = None
+    selector_builder: SelectorBuilder = field(default_factory=SelectorBuilder)
 
     async def recover(
         self,
@@ -44,6 +47,7 @@ class RecoveryEngine:
         error_message: str = "",
         retry_count: int = 0,
         candidate_selectors: list[str] | None = None,
+        elements: list[dict[str, Any]] | None = None,
     ) -> RecoveryResult:
         logger = get_logger(__name__)
         logger.info(
@@ -55,12 +59,13 @@ class RecoveryEngine:
             },
         )
 
-        if error_type == "missing_selector":
+        if error_type in {"missing_selector", "selector_failure"}:
             return await self._recover_missing_selector(
                 page=page,
                 failed_action=failed_action,
                 retry_count=retry_count,
                 candidate_selectors=candidate_selectors or [],
+                elements=elements,
             )
 
         if error_type == "navigation_failure":
@@ -103,7 +108,29 @@ class RecoveryEngine:
         failed_action: dict[str, Any],
         retry_count: int,
         candidate_selectors: list[str],
+        elements: list[dict[str, Any]] | None = None,
     ) -> RecoveryResult:
+        logger = get_logger(__name__)
+        action_type = str(failed_action.get("action", "click"))
+        resolved_elements = elements if elements is not None else failed_action.get("elements", [])
+
+        fallback_chain = self.selector_builder.build_fallback_chain(resolved_elements, action_type)
+        if fallback_chain:
+            for candidate in fallback_chain:
+                logger.debug("recovery_trying_fallback_selector", extra={"selector": candidate})
+            fallback_selector = fallback_chain[0]
+            next_action = dict(failed_action)
+            next_action["selector"] = fallback_selector
+            return {
+                "recovered": True,
+                "strategy": "fallback_selector",
+                "next_action": next_action,
+                "fallback_selector": fallback_selector,
+                "details": f"Using fallback selector: {fallback_selector}",
+            }
+
+        logger.warning("recovery_no_fallback_selectors", extra={"action_type": action_type})
+
         if retry_count < self.max_retries:
             return {
                 "recovered": True,
