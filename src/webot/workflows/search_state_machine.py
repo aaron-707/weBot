@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter
@@ -143,13 +144,21 @@ class SearchStateMachine:
         lowered = goal.lower()
         return any(token in lowered for token in ("search", "find", "look up", "query"))
 
+    # Matches trailing site-reference clauses like " on duckduckgo", " using google.com",
+    # " via bing" — a bare word or domain-like token after the preposition.
+    _SITE_REF_RE = re.compile(
+        r"\s+(?:on|using|via)\s+[A-Za-z0-9](?:[A-Za-z0-9\-]*\.?[A-Za-z0-9]+)*\s*$",
+        re.IGNORECASE,
+    )
+
     @staticmethod
     def _extract_query(goal: str) -> str:
         lowered = goal.lower()
         for trigger in ("search for ", "search ", "find ", "look up ", "query "):
             idx = lowered.find(trigger)
             if idx >= 0:
-                return goal[idx + len(trigger):].strip().strip(".")
+                raw = goal[idx + len(trigger):].strip().strip(".")
+                return SearchStateMachine._SITE_REF_RE.sub("", raw).strip()
         return ""
 
     @staticmethod
