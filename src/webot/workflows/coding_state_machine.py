@@ -52,7 +52,9 @@ class CodingStateMachine:
         current_url: str,
         recent_actions: list[dict[str, Any]],
     ) -> Action | None:
-        if not TaskInterpreter.is_coding_goal(user_goal):
+        is_coding = TaskInterpreter.is_coding_goal(user_goal)
+        is_coding_site = any(site in current_url.lower() for site in ("leetcode.com", "hackerrank.com", "codeforces.com"))
+        if not is_coding and not is_coding_site:
             return None
 
         self._language = TaskInterpreter.extract_coding_language(user_goal)

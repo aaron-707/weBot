@@ -430,6 +430,15 @@ class AgentLoop:
         recent_actions: list[dict[str, Any]],
     ) -> Action | None:
         current_url = self.page.url
+        if self.coding_state_machine is not None:
+            action = self.coding_state_machine.next_action(
+                user_goal=user_goal,
+                dom_state=dom_state,
+                current_url=current_url,
+                recent_actions=recent_actions,
+            )
+            if action is not None:
+                return action
         if self.search_state_machine is not None:
             action = self.search_state_machine.next_action(
                 user_goal=user_goal,
@@ -457,16 +466,8 @@ class AgentLoop:
             )
             if action is not None:
                 return action
-        if self.coding_state_machine is not None:
-            action = self.coding_state_machine.next_action(
-                user_goal=user_goal,
-                dom_state=dom_state,
-                current_url=current_url,
-                recent_actions=recent_actions,
-            )
-            if action is not None:
-                return action
         return None
+
 
 
     @staticmethod
@@ -651,12 +652,16 @@ class AgentLoop:
         if self.complete_on_extract_text and action.get("action") == "extract_text":
             if self.search_state_machine is not None and self.search_state_machine._state != "start" and not self.search_state_machine.should_allow_extract_termination():
                 return None
+            if self.coding_state_machine is not None and self.coding_state_machine._state not in ("start", "completed", "failed"):
+                return None
             data = execution_result.get("data")
             if isinstance(data, dict) and isinstance(data.get("text"), str) and data["text"].strip():
                 return "completed", ""
 
         # Optional completion hint from validator reason.
         if validation_result.get("reason") == "extract_text_validated":
+            if self.coding_state_machine is not None and self.coding_state_machine._state not in ("start", "completed", "failed"):
+                return None
             return "completed", ""
 
         return None

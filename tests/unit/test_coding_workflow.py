@@ -142,3 +142,46 @@ async def test_action_executor_and_validator_editor_fill():
     )
     assert val_result["success"] is True
     assert val_result["reason"] == "editor_fill_validated"
+
+
+def test_form_state_machine_does_not_hijack_coding_goals():
+    from webot.workflows.form_state_machine import FormStateMachine
+
+    fsm = FormStateMachine()
+    prompt = "open leetcode and goto any easy level problem of your choice and solve it then submit the program(use python)"
+    dom_state = {"inputs": [], "buttons": [], "links": []}
+
+    action = fsm.next_action(
+        user_goal=prompt,
+        dom_state=dom_state,
+        current_url="https://leetcode.com/problemset/",
+        recent_actions=[],
+    )
+    assert action is None, "FormStateMachine must NOT hijack a LeetCode problem submission goal"
+
+
+def test_coding_state_machine_handles_followup_prompts_on_active_domain():
+    csm = CodingStateMachine()
+    dom_state = {
+        "inputs": [],
+        "buttons": [],
+        "links": [
+            {
+                "selector": "a.two-sum",
+                "text": "Two Sum",
+                "attributes": {"href": "/problems/two-sum/"},
+            }
+        ],
+    }
+
+    # Follow-up prompt with informal wording on active LeetCode page
+    action = csm.next_action(
+        user_goal="choose any problem of you choice",
+        dom_state=dom_state,
+        current_url="https://leetcode.com/problemset/",
+        recent_actions=[],
+    )
+    assert action is not None
+    assert action["action"] == "click"
+    assert "two-sum" in action["selector"]
+

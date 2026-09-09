@@ -91,9 +91,16 @@ class FormStateMachine:
     @staticmethod
     def _is_form_goal(goal: str) -> bool:
         lowered = goal.lower()
-        if any(token in lowered for token in ("fill", "submit", "apply")):
+        # Never hijack coding / algorithmic problem tasks
+        if any(site in lowered for site in ("leetcode", "hackerrank", "codeforces")):
+            return False
+        if "problem" in lowered and any(k in lowered for k in ("solve", "code", "python", "java", "c++")):
+            return False
+        if any(token in lowered for token in ("fill", "apply")) or bool(re.search(r"\bform\b", lowered)):
             return True
-        return bool(re.search(r"\bform\b", lowered))
+        if "submit" in lowered and any(term in lowered for term in ("form", "application", "details", "fields")):
+            return True
+        return False
 
     @staticmethod
     def _find_required_fields(dom_state: dict[str, list[DomElement]]) -> list[str]:

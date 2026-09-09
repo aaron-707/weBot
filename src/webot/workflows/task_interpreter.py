@@ -198,7 +198,9 @@ class TaskInterpreter:
         lowered = instruction.lower()
         if any(site in lowered for site in ("leetcode", "hackerrank", "codeforces")):
             return True
-        return ("solve" in lowered or "problem" in lowered) and ("code" in lowered or "program" in lowered or "submit" in lowered)
+        if "problem" in lowered and any(token in lowered for token in ("solve", "code", "program", "submit", "choose", "select", "pick", "easy", "medium", "hard")):
+            return True
+        return ("solve" in lowered) and ("code" in lowered or "program" in lowered or "submit" in lowered)
 
     @staticmethod
     def extract_coding_language(instruction: str) -> str:
