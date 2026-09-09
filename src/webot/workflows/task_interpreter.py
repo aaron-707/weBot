@@ -116,6 +116,7 @@ class TaskInterpreter:
         "the-internet": "the-internet.herokuapp.com/login",
         "herokuapp": "the-internet.herokuapp.com/login",
         "wikipedia": "wikipedia.org",
+        "leetcode": "leetcode.com/problemset/",
     }
 
     def _extract_domain_hint(self, instruction: str) -> str | None:
@@ -191,3 +192,26 @@ class TaskInterpreter:
                 return {"action": "search", "query": query}
 
         return None
+
+    @staticmethod
+    def is_coding_goal(instruction: str) -> bool:
+        lowered = instruction.lower()
+        if any(site in lowered for site in ("leetcode", "hackerrank", "codeforces")):
+            return True
+        return ("solve" in lowered or "problem" in lowered) and ("code" in lowered or "program" in lowered or "submit" in lowered)
+
+    @staticmethod
+    def extract_coding_language(instruction: str) -> str:
+        lowered = instruction.lower()
+        for lang in ("python3", "python", "javascript", "typescript", "cpp", "c++", "java", "rust", "go"):
+            if lang in lowered:
+                return "python" if lang in ("python3", "python") else lang
+        return "python"
+
+    @staticmethod
+    def extract_coding_difficulty(instruction: str) -> str:
+        lowered = instruction.lower()
+        for diff in ("easy", "medium", "hard"):
+            if diff in lowered:
+                return diff
+        return "easy"

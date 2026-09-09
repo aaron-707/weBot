@@ -8,7 +8,7 @@ import structlog
 from structlog.typing import FilteringBoundLogger
 
 
-ActionType = Literal["goto", "click", "fill", "submit", "extract_text"]
+ActionType = Literal["goto", "click", "fill", "submit", "extract_text", "editor_fill"]
 
 
 class Action(TypedDict, total=False):
@@ -35,6 +35,8 @@ class BrowserControllerProtocol(Protocol):
     async def fill(self, selector: str, value: str) -> None: ...
 
     async def extract_text(self, selector: str) -> str: ...
+
+    async def set_editor_content(self, code: str, selector: str | None = None) -> dict[str, bool | str | None]: ...
 
 
 @dataclass(slots=True)
@@ -172,6 +174,17 @@ class ActionExecutor:
                 "text": text,
             }
 
+        if action_name == "editor_fill":
+            code = action["value"]
+            selector = action.get("selector")
+            res = await self.browser_controller.set_editor_content(code, selector=selector)
+            if isinstance(res, dict) and not res.get("ok"):
+                raise RuntimeError(res.get("error") or "Failed to set editor content")
+            return {
+                "selector": selector or "editor",
+                "value_length": len(code),
+            }
+
         # Defensive fallback even though validation should prevent this.
         raise ValueError(f"Unsupported action: {action_name}")
 
@@ -180,7 +193,7 @@ class ActionExecutor:
             return "Action must be a dictionary"
 
         action_name = action.get("action")
-        if action_name not in {"goto", "click", "fill", "submit", "extract_text"}:
+        if action_name not in {"goto", "click", "fill", "submit", "extract_text", "editor_fill"}:
             return "Invalid or missing action type"
 
         if action_name == "goto":
@@ -193,6 +206,9 @@ class ActionExecutor:
             selector_error = self._require_non_empty_string(action, "selector")
             if selector_error:
                 return selector_error
+            return self._require_non_empty_string(action, "value")
+
+        if action_name == "editor_fill":
             return self._require_non_empty_string(action, "value")
 
         return "Invalid action"

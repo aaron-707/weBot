@@ -426,3 +426,44 @@ class DecisionEngine:
         except Exception:
             logger.warning("llm_infer_start_url_failed")
         return None
+
+    def synthesize_code_solution(
+        self,
+        problem_description: str,
+        starter_code: str = "",
+        language: str = "python",
+    ) -> str:
+        """Synthesize a complete code solution conforming to starter_code signature."""
+        logger = get_logger(__name__)
+        if not self.ollama_client or not self.ollama_client.is_available():
+            return starter_code or "# Solution placeholder"
+
+        prompt = (
+            f"You are an expert {language} competitive programmer.\n"
+            f"Solve the following coding problem completely and correctly.\n"
+            f"Requirements:\n"
+            f"1. Conforming to the starter code signature provided below.\n"
+            f"2. Return ONLY the executable {language} code.\n"
+            f"3. Do NOT include markdown code blocks, backticks, or conversational explanations.\n\n"
+            f"Problem Description:\n{problem_description[:2000]}\n\n"
+        )
+        if starter_code.strip():
+            prompt += f"Starter Code Template:\n{starter_code[:1000]}\n\n"
+        prompt += f"Return the complete {language} solution code only:"
+
+        try:
+            self.llm_consulted_count += 1
+            logger.info("decision_engine_synthesizing_code", extra={"language": language})
+            raw = self.ollama_client.generate(prompt)
+            code = self._strip_code_fence(raw).strip()
+            lines = code.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            cleaned_code = "\n".join(lines).strip()
+            return cleaned_code or starter_code
+        except Exception as exc:
+            logger.warning("code_synthesis_failed", extra={"error": str(exc)})
+            return starter_code
+

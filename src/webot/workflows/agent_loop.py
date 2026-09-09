@@ -17,6 +17,7 @@ from webot.workflows.form_state_machine import FormStateMachine
 from webot.workflows.goal_evaluator import GoalEvaluator
 from webot.workflows.login_state_machine import LoginStateMachine
 from webot.workflows.progress_tracker import ProgressTracker
+from webot.workflows.coding_state_machine import CodingStateMachine
 from webot.workflows.recovery_engine import ErrorType, RecoveryEngine
 from webot.workflows.search_state_machine import SearchStateMachine
 
@@ -72,6 +73,7 @@ class AgentLoop:
     search_state_machine: SearchStateMachine | None = None
     form_state_machine: FormStateMachine | None = None
     login_state_machine: LoginStateMachine | None = None
+    coding_state_machine: CodingStateMachine | None = None
     _fill_streak_reset: bool = field(default=False, init=False, repr=False)
     _last_pivot_selector: str | None = field(default=None, init=False, repr=False)
 
@@ -88,6 +90,12 @@ class AgentLoop:
             )
         if self.login_state_machine is None:
             self.login_state_machine = LoginStateMachine(
+                progress_tracker=self.progress_tracker,
+                goal_evaluator=self.goal_evaluator,
+            )
+        if self.coding_state_machine is None:
+            self.coding_state_machine = CodingStateMachine(
+                decision_engine=self.decision_engine,
                 progress_tracker=self.progress_tracker,
                 goal_evaluator=self.goal_evaluator,
             )
@@ -449,7 +457,17 @@ class AgentLoop:
             )
             if action is not None:
                 return action
+        if self.coding_state_machine is not None:
+            action = self.coding_state_machine.next_action(
+                user_goal=user_goal,
+                dom_state=dom_state,
+                current_url=current_url,
+                recent_actions=recent_actions,
+            )
+            if action is not None:
+                return action
         return None
+
 
     @staticmethod
     def _deterministic_action(

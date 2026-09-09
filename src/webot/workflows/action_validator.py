@@ -11,7 +11,7 @@ from webot.intelligence.interstitial_detector import InterstitialDetector
 from webot.utils.logger import get_logger
 
 
-ActionType = Literal["goto", "click", "fill", "submit", "extract_text"]
+ActionType = Literal["goto", "click", "fill", "submit", "extract_text", "editor_fill"]
 
 
 class ValidationResult(TypedDict):
@@ -50,6 +50,8 @@ class ActionValidator:
                 result = await self._validate_submit(page=page, action=action, before_state=before_state)
             elif action_type == "extract_text":
                 result = await self._validate_extract_text(action_result=action_result)
+            elif action_type == "editor_fill":
+                result = await self._validate_editor_fill(action_result=action_result)
             else:
                 result = {
                     "success": False,
@@ -219,6 +221,14 @@ class ActionValidator:
             "success": success,
             "reason": "extract_text_validated" if success else "empty_extracted_text",
             "details": {"text_length": len(text)},
+        }
+
+    async def _validate_editor_fill(self, *, action_result: dict[str, Any] | None) -> ValidationResult:
+        success = bool(action_result and action_result.get("success", False))
+        return {
+            "success": success,
+            "reason": "editor_fill_validated" if success else "editor_fill_failed",
+            "details": {"action_result": action_result},
         }
 
     async def _check_submit_signals(self, page: Page, pre_url: str) -> bool:

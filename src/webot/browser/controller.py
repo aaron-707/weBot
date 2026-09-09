@@ -111,3 +111,55 @@ class BrowserController:
 
         if not await locator.first.is_enabled():
             raise TimeoutError(f"Element '{selector}' was not enabled within {timeout_ms}ms")
+
+    async def set_editor_content(
+        self, code: str, selector: str | None = None
+    ) -> dict[str, bool | str | None]:
+        """Inject code into a rich web editor (Monaco/CodeMirror/textarea)."""
+        try:
+            # 1. Try Monaco JavaScript API first (instant, clean, reliable)
+            monaco_set = await self.page.evaluate(
+                """(content) => {
+                    if (window.monaco && window.monaco.editor) {
+                        const models = window.monaco.editor.getModels();
+                        if (models && models.length > 0) {
+                            models[0].setValue(content);
+                            return true;
+                        }
+                    }
+                    return false;
+                }""",
+                code,
+            )
+            if monaco_set:
+                logger.info("editor_content_set_via_monaco_api")
+                return {"ok": True, "error": None}
+
+            # 2. Try CodeMirror JavaScript API
+            codemirror_set = await self.page.evaluate(
+                """(content) => {
+                    const cmElem = document.querySelector('.CodeMirror');
+                    if (cmElem && cmElem.CodeMirror) {
+                        cmElem.CodeMirror.setValue(content);
+                        return true;
+                    }
+                    return false;
+                }""",
+                code,
+            )
+            if codemirror_set:
+                logger.info("editor_content_set_via_codemirror_api")
+                return {"ok": True, "error": None}
+
+            # 3. Fallback: focus editor area and use keyboard select-all + insertion
+            target_selector = selector or ".monaco-editor, [data-track-load='code_editor'], .monaco-scrollable-element, textarea"
+            locator = self.page.locator(target_selector).first
+            await locator.click()
+            await self.page.keyboard.press("ControlOrMeta+A")
+            await self.page.keyboard.press("Backspace")
+            await self.page.keyboard.insert_text(code)
+            logger.info("editor_content_set_via_keyboard_insertion")
+            return {"ok": True, "error": None}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("set_editor_content_failed", extra={"error": str(exc)})
+            return {"ok": False, "error": str(exc)}
