@@ -43,6 +43,7 @@ class CodingStateMachine:
     _language: str = "python"
     _target_difficulty: str = "easy"
     _lang_trigger_clicked: bool = False
+    _last_url: str = ""
     _verdict_polls: int = 0
     _max_verdict_polls: int = 5
 
@@ -54,6 +55,10 @@ class CodingStateMachine:
         current_url: str,
         recent_actions: list[dict[str, Any]],
     ) -> Action | None:
+        if current_url and self._last_url and current_url.rstrip("/") != self._last_url.rstrip("/"):
+            self._lang_trigger_clicked = False
+        self._last_url = current_url
+
         is_coding = TaskInterpreter.is_coding_goal(user_goal)
         is_coding_site = any(site in current_url.lower() for site in ("leetcode.com", "hackerrank.com", "codeforces.com"))
         if not is_coding and not is_coding_site:
@@ -226,6 +231,12 @@ class CodingStateMachine:
             else:
                 triggers.append(item)
 
+        # Also check visible text items when looking for candidate language options
+        for item in dom_state.get("visible_text", []):
+            text = item.get("text", "").strip().lower()
+            if text in (target_lang, f"{target_lang}3", f"{target_lang} 3") or (target_lang == "python" and bool(re.search(r"\bpython3?\b", text))):
+                options.append(item)
+
         # 1. First, check if the active language trigger already matches target_lang (e.g. "Python3" or "Python")
         for btn in triggers:
             text = btn.get("text", "").strip().lower()
@@ -246,7 +257,7 @@ class CodingStateMachine:
             )
             if is_match:
                 self._transition(CodingState.SYNTHESIZE_SOLUTION)
-                sel = item.get("selector") or f"[role='option']:has-text('{self._language.capitalize()}')"
+                sel = item.get("selector") or f":text-is('{self._language.capitalize()}')"
                 return {"action": "click", "selector": sel}
 
         # 3. If we haven't clicked the dropdown trigger yet, click it to open the options
@@ -263,7 +274,15 @@ class CodingStateMachine:
             lang_label = "Python3" if target_lang == "python" else self._language.capitalize()
             return {
                 "action": "click",
-                "selector": f"[role='option']:has-text('{lang_label}'), [role='menuitem']:has-text('{lang_label}'), button:has-text('{lang_label}')",
+                "selector": (
+                    f":text-is('{lang_label}'), "
+                    f"div:text-is('{lang_label}'), "
+                    f"span:text-is('{lang_label}'), "
+                    f"li:text-is('{lang_label}'), "
+                    f"[role='option']:has-text('{lang_label}'), "
+                    f"[role='menuitem']:has-text('{lang_label}'), "
+                    f"button:has-text('{lang_label}')"
+                ),
             }
 
         return None

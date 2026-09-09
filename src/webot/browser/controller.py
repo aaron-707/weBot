@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
@@ -78,16 +79,36 @@ class BrowserController:
                 await loc.scroll_into_view_if_needed(timeout=2000)
             except Exception:
                 pass
-            await loc.click(timeout=5000)
+            await loc.click(timeout=4000)
             return {"ok": True, "error": None}
         except Exception as exc:  # noqa: BLE001
+            # Attempt 1: Force click
             try:
                 loc = self.page.locator(selector).first
-                await loc.click(force=True, timeout=3000)
+                await loc.click(force=True, timeout=2000)
                 return {"ok": True, "error": None}
-            except Exception as force_exc:
-                logger.warning("click_failed", extra={"selector": selector, "error": str(force_exc)})
-                return {"ok": False, "error": str(force_exc)}
+            except Exception:
+                pass
+
+            # Attempt 2: If selector contains text targeting (e.g. :has-text('Foo')), fallback to broad text matching
+            text_match = re.search(r"has-text\(['\"]([^'\"]+)['\"]\)", selector)
+            if text_match:
+                target_text = text_match.group(1).strip()
+                if target_text:
+                    try:
+                        fallback_sel = f":text-is('{target_text}'), div:text-is('{target_text}'), span:text-is('{target_text}'), text='{target_text}'"
+                        fallback_loc = self.page.locator(fallback_sel).first
+                        try:
+                            await fallback_loc.scroll_into_view_if_needed(timeout=1500)
+                        except Exception:
+                            pass
+                        await fallback_loc.click(timeout=2500)
+                        return {"ok": True, "error": None}
+                    except Exception:
+                        pass
+
+            logger.warning("click_failed", extra={"selector": selector, "error": str(exc)})
+            return {"ok": False, "error": str(exc)}
 
     async def fill(self, selector: str, value: str) -> dict[str, bool | str | None]:
         try:

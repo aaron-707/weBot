@@ -138,9 +138,12 @@ class ActionExecutor:
             if isinstance(res, dict) and not res.get("ok", True):
                 raise RuntimeError(res.get("error") or f"Click failed for {action['selector']}")
             page = getattr(self.browser_controller, "page", None)
-            if page is not None and any(k in action["selector"].lower() for k in ("search", "submit")):
+            if page is not None:
                 try:
-                    await page.wait_for_timeout(1000)
+                    if any(k in action["selector"].lower() for k in ("search", "submit")):
+                        await page.wait_for_timeout(1000)
+                    else:
+                        await page.wait_for_timeout(300)
                 except Exception:
                     pass
             return {"selector": action["selector"]}
