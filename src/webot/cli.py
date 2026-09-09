@@ -46,6 +46,7 @@ from webot.workflows.agent_loop import AgentLoop
 from webot.workflows.goal_evaluator import GoalEvaluator
 from webot.workflows.progress_tracker import ProgressTracker
 from webot.workflows.recovery_engine import RecoveryEngine
+from webot.workflows.search_state_machine import SearchStateMachine
 from webot.workflows.task_interpreter import TaskInterpreter
 
 
@@ -75,13 +76,18 @@ async def run_prompt(
     interpreter = TaskInterpreter(decision_engine=decision_engine)
     start_url = interpreter.extract_start_url(prompt)
     if not start_url:
-        raise ValueError(
-            "Could not determine a starting site from the prompt. "
-            "Mention a URL or a site name, e.g. "
-            "\"search for python internships on duckduckgo\", "
-            "\"open https://example.com and ...\", or "
-            "\"look up developer documentation on stripe\"."
-        )
+        if SearchStateMachine._is_search_goal(prompt):
+            start_url = "https://duckduckgo.com"
+            logger.info("defaulting_search_start_url", extra={"url": start_url})
+        else:
+            raise ValueError(
+                "Could not determine a starting site from the prompt. "
+                "Please mention a target website or URL, e.g.:\n"
+                "  - 'open youtube and search for ...'\n"
+                "  - 'search for ... on youtube'\n"
+                "  - 'open https://example.com and ...'\n"
+                "  - 'search for python internships' (defaults to DuckDuckGo)"
+            )
 
     browser = BrowserController(headless=headless)
     out_dir = PROJECT_ROOT / "artifacts" / "runtime" / "cli"
