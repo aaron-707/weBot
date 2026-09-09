@@ -26,6 +26,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -51,13 +52,14 @@ from webot.workflows.task_interpreter import TaskInterpreter
 
 
 async def run_prompt(
-    prompt: str,
+    prompt: str = "",
     *,
     headless: bool = False,
     max_steps: int = 10,
     keep_open: bool = False,
+    cdp_url: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a starting URL from `prompt`, then run AgentLoop against it."""
+    """Execute a task prompt using the browser's current page or an explicit start URL."""
     logger = get_logger(__name__)
 
     ollama_info = resolve_ollama_config_sources(settings)
@@ -72,31 +74,65 @@ async def run_prompt(
     )
     llm_available = ollama_client.is_available()
     decision_engine = DecisionEngine(ollama_client=ollama_client)
-
     interpreter = TaskInterpreter(decision_engine=decision_engine)
-    start_url = interpreter.extract_start_url(prompt)
-    if not start_url:
-        if SearchStateMachine._is_search_goal(prompt):
-            start_url = "https://duckduckgo.com"
-            logger.info("defaulting_search_start_url", extra={"url": start_url})
-        else:
-            raise ValueError(
-                "Could not determine a starting site from the prompt. "
-                "Please mention a target website or URL, e.g.:\n"
-                "  - 'open youtube and search for ...'\n"
-                "  - 'search for ... on youtube'\n"
-                "  - 'open https://example.com and ...'\n"
-                "  - 'search for python internships' (defaults to DuckDuckGo)"
-            )
 
     browser = BrowserController(headless=headless)
     out_dir = PROJECT_ROOT / "artifacts" / "runtime" / "cli"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        await browser.open()
-        logger.info("navigating", extra={"url": start_url})
-        await browser.goto(start_url)
+        await browser.open(cdp_url=cdp_url)
+        active_url = browser.page.url
+
+        if not prompt.strip():
+            if headless:
+                raise ValueError("A task prompt must be provided when running in headless mode.")
+            print(f"\n[weBot] Connected to browser. Active URL: {active_url or 'about:blank'}")
+            try:
+                prompt = (await asyncio.to_thread(input, "[weBot] Enter prompt: ")).strip()
+            except (KeyboardInterrupt, EOFError):
+                prompt = ""
+            if not prompt:
+                return {"status": "cancelled", "prompt": "", "final_url": active_url}
+
+        explicit_site = interpreter.extract_start_url(prompt)
+        start_url: str
+
+        if active_url and active_url not in ("", "about:blank"):
+            # Browser is already running on a page
+            if explicit_site:
+                curr_host = urlparse(active_url).netloc.lower()
+                target_host = urlparse(explicit_site).netloc.lower()
+                if curr_host != target_host and not curr_host.endswith("." + target_host) and not target_host.endswith("." + curr_host):
+                    logger.info("navigating_to_requested_site", extra={"url": explicit_site})
+                    await browser.goto(explicit_site)
+                    start_url = explicit_site
+                else:
+                    logger.info("using_current_page", extra={"url": active_url})
+                    start_url = active_url
+            else:
+                # Prompt has no explicit site -> run directly on whatever the browser is currently showing
+                logger.info("using_current_page", extra={"url": active_url})
+                start_url = active_url
+        else:
+            # Browser is on about:blank
+            if explicit_site:
+                start_url = explicit_site
+                logger.info("navigating", extra={"url": start_url})
+                await browser.goto(start_url)
+            elif SearchStateMachine._is_search_goal(prompt):
+                start_url = "https://duckduckgo.com"
+                logger.info("defaulting_search_start_url", extra={"url": start_url})
+                await browser.goto(start_url)
+            else:
+                raise ValueError(
+                    "The browser is currently on a blank page and no starting website was specified in the prompt.\n"
+                    "Please mention a target website or URL, e.g.:\n"
+                    "  - 'open youtube and search for ...'\n"
+                    "  - 'search for ... on youtube'\n"
+                    "  - 'search for python internships' (defaults to DuckDuckGo when blank)\n"
+                    "Or connect to an already-open browser using --cdp."
+                )
 
         dom_extractor = DomExtractor()
         session_memory = SessionMemory(max_actions=400)
@@ -158,12 +194,50 @@ async def run_prompt(
             "screenshot": str(screenshot_path),
         }
         (out_dir / "last_run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-        if keep_open and not headless:
-            print("\n[weBot] Task finished. Browser kept open. Press Enter to close...", flush=True)
+
+        while keep_open and not headless:
+            curr_url = browser.page.url
+            print(f"\n[weBot] Active URL: {curr_url}")
             try:
-                await asyncio.to_thread(input)
+                next_prompt = await asyncio.to_thread(
+                    input, "[weBot] Enter next prompt (or press Enter to exit): "
+                )
             except (KeyboardInterrupt, EOFError):
-                pass
+                break
+            next_prompt = next_prompt.strip()
+            if not next_prompt:
+                break
+
+            next_site = interpreter.extract_start_url(next_prompt)
+            if next_site:
+                curr_host = urlparse(browser.page.url).netloc.lower()
+                target_host = urlparse(next_site).netloc.lower()
+                if curr_host != target_host and not curr_host.endswith("." + target_host) and not target_host.endswith("." + curr_host):
+                    logger.info("navigating_to_requested_site", extra={"url": next_site})
+                    await browser.goto(next_site)
+
+            sub_tracker = ProgressTracker(window_size=20)
+            sub_loop = AgentLoop(
+                page=browser.page,
+                dom_extractor=dom_extractor,
+                decision_engine=decision_engine,
+                action_executor=action_executor,
+                action_validator=action_validator,
+                session_memory=session_memory,
+                dom_delta=dom_delta,
+                recovery_engine=recovery_engine,
+                max_steps=max_steps,
+                max_consecutive_failures=3,
+                complete_on_extract_text=True,
+                llm_enabled=llm_available,
+                degraded_mode=not llm_available,
+                progress_tracker=sub_tracker,
+                goal_evaluator=goal_evaluator,
+            )
+            sub_result = await sub_loop.run(next_prompt)
+            sub_status = sub_result.get("status") if isinstance(sub_result, dict) else "unknown"
+            print(f"[weBot] Task status: {sub_status}")
+
         return summary
     finally:
         await browser.close()
@@ -171,13 +245,19 @@ async def run_prompt(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="weBot: run a free-text browser task autonomously.")
-    parser.add_argument("prompt", help="Natural-language task, e.g. 'search for X on duckduckgo'")
+    parser.add_argument("prompt", nargs="?", default="", help="Natural-language task, e.g. 'search for X on duckduckgo'")
     parser.add_argument("--headless", action="store_true", help="Run without a visible browser window")
     parser.add_argument("--max-steps", type=int, default=10)
     parser.add_argument(
         "--keep-open",
         action="store_true",
-        help="Keep the browser window open after task completion until you press Enter",
+        help="Keep the browser window open after task completion for consecutive prompts",
+    )
+    parser.add_argument(
+        "--cdp",
+        dest="cdp_url",
+        default=None,
+        help="Connect to an already running browser instance via CDP (e.g. http://127.0.0.1:9222)",
     )
     args = parser.parse_args()
 
@@ -193,10 +273,11 @@ def main() -> None:
             headless=args.headless,
             max_steps=args.max_steps,
             keep_open=args.keep_open,
+            cdp_url=args.cdp_url,
         )
     )
     print(json.dumps(summary, indent=2))
-    sys.exit(0 if summary.get("status") == "completed" else 1)
+    sys.exit(0 if summary.get("status") in {"completed", "cancelled"} else 1)
 
 
 if __name__ == "__main__":

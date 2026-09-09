@@ -162,14 +162,54 @@ def test_task_interpreter_resolves_youtube_start_url():
 def test_cli_keep_open_flag_parsing():
     import argparse
 
-    # Verify argparse in cli module accepts --keep-open
+    # Verify argparse in cli module accepts --keep-open and --cdp
     parser = argparse.ArgumentParser()
-    parser.add_argument("prompt")
+    parser.add_argument("prompt", nargs="?", default="")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--max-steps", type=int, default=10)
     parser.add_argument("--keep-open", action="store_true")
+    parser.add_argument("--cdp", dest="cdp_url", default=None)
 
     args = parser.parse_args(["open youtube and search for python", "--keep-open"])
     assert args.keep_open is True
     assert args.headless is False
+    assert args.cdp_url is None
+
+    cdp_args = parser.parse_args(["--cdp", "http://127.0.0.1:9222", "--keep-open"])
+    assert cdp_args.cdp_url == "http://127.0.0.1:9222"
+    assert cdp_args.prompt == ""
+    assert cdp_args.keep_open is True
+
+
+def test_active_browser_page_preserved_for_subsequent_or_active_prompts():
+    from urllib.parse import urlparse
+
+    active_url = "https://www.youtube.com/results?search_query=nfs"
+    ti = TaskInterpreter()
+
+    # Prompt 1: follow-up action with no site mentioned
+    prompt_followup = "click on the first video"
+    explicit_site = ti.extract_start_url(prompt_followup)
+    assert explicit_site is None
+    # Routing decision: stays on active_url, does not default to DuckDuckGo
+    routed_url = explicit_site if explicit_site else active_url
+    assert routed_url == active_url
+
+    # Prompt 2: follow-up action on same domain
+    prompt_same_domain = "search for gameplay on youtube"
+    explicit_same = ti.extract_start_url(prompt_same_domain)
+    assert explicit_same == "https://youtube.com"
+    curr_host = urlparse(active_url).netloc.lower()
+    target_host = urlparse(explicit_same).netloc.lower()
+    is_same_host = curr_host == target_host or curr_host.endswith("." + target_host) or target_host.endswith("." + curr_host)
+    assert is_same_host is True  # Stays on current page, doesn't reload root
+
+    # Prompt 3: navigation to completely different site
+    prompt_diff_domain = "open wikipedia and search for cars"
+    explicit_diff = ti.extract_start_url(prompt_diff_domain)
+    assert explicit_diff == "https://wikipedia.org"
+    diff_host = urlparse(explicit_diff).netloc.lower()
+    is_diff = curr_host != diff_host and not curr_host.endswith("." + diff_host) and not diff_host.endswith("." + curr_host)
+    assert is_diff is True  # Navigates to new site
+
 

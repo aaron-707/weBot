@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from pathlib import Path
@@ -20,6 +20,7 @@ class BrowserController:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._is_cdp: bool = False
 
     @property
     def page(self) -> Page:
@@ -27,23 +28,33 @@ class BrowserController:
             raise RuntimeError("Browser page is not initialized. Call open() first.")
         return self._page
 
-    async def open(self) -> None:
+    async def open(self, cdp_url: str | None = None) -> None:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
-        self._context = await self._browser.new_context(user_agent=settings.browser.user_agent)
-        self._page = await self._context.new_page()
+        if cdp_url:
+            self._is_cdp = True
+            self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
+            self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+            logger.info("connected_over_cdp", extra={"cdp_url": cdp_url, "current_url": self._page.url})
+        else:
+            self._is_cdp = False
+            self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            self._context = await self._browser.new_context(user_agent=settings.browser.user_agent)
+            self._page = await self._context.new_page()
         self._page.set_default_timeout(settings.browser.timeout_ms)
         self._page.set_default_navigation_timeout(settings.browser.navigation_timeout_ms)
 
     async def close(self) -> None:
         errors: list[str] = []
-        for closer, label in (
-            (self._context.close if self._context else None, "context"),
-            (self._browser.close if self._browser else None, "browser"),
-            (self._playwright.stop if self._playwright else None, "playwright"),
-        ):
-            if closer is None:
-                continue
+        closers = []
+        if not self._is_cdp and self._context:
+            closers.append((self._context.close, "context"))
+        if self._browser:
+            closers.append((self._browser.close, "browser"))
+        if self._playwright:
+            closers.append((self._playwright.stop, "playwright"))
+
+        for closer, label in closers:
             try:
                 await closer()
             except Exception as exc:  # noqa: BLE001
