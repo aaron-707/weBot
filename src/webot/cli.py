@@ -49,7 +49,13 @@ from webot.workflows.recovery_engine import RecoveryEngine
 from webot.workflows.task_interpreter import TaskInterpreter
 
 
-async def run_prompt(prompt: str, *, headless: bool = False, max_steps: int = 10) -> dict[str, Any]:
+async def run_prompt(
+    prompt: str,
+    *,
+    headless: bool = False,
+    max_steps: int = 10,
+    keep_open: bool = False,
+) -> dict[str, Any]:
     """Resolve a starting URL from `prompt`, then run AgentLoop against it."""
     logger = get_logger(__name__)
 
@@ -146,6 +152,12 @@ async def run_prompt(prompt: str, *, headless: bool = False, max_steps: int = 10
             "screenshot": str(screenshot_path),
         }
         (out_dir / "last_run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        if keep_open and not headless:
+            print("\n[weBot] Task finished. Browser kept open. Press Enter to close...", flush=True)
+            try:
+                await asyncio.to_thread(input)
+            except (KeyboardInterrupt, EOFError):
+                pass
         return summary
     finally:
         await browser.close()
@@ -156,6 +168,11 @@ def main() -> None:
     parser.add_argument("prompt", help="Natural-language task, e.g. 'search for X on duckduckgo'")
     parser.add_argument("--headless", action="store_true", help="Run without a visible browser window")
     parser.add_argument("--max-steps", type=int, default=10)
+    parser.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="Keep the browser window open after task completion until you press Enter",
+    )
     args = parser.parse_args()
 
     setup_logging(
@@ -164,7 +181,14 @@ def main() -> None:
         log_file=settings.logging.log_file,
     )
 
-    summary = asyncio.run(run_prompt(args.prompt, headless=args.headless, max_steps=args.max_steps))
+    summary = asyncio.run(
+        run_prompt(
+            args.prompt,
+            headless=args.headless,
+            max_steps=args.max_steps,
+            keep_open=args.keep_open,
+        )
+    )
     print(json.dumps(summary, indent=2))
     sys.exit(0 if summary.get("status") == "completed" else 1)
 

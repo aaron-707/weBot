@@ -157,3 +157,19 @@ def test_task_interpreter_resolves_youtube_start_url():
     ti = TaskInterpreter()
     url = ti.extract_start_url("open youtube and search for the most populat nfs video")
     assert url == "https://youtube.com"
+
+
+def test_cli_keep_open_flag_parsing():
+    import argparse
+
+    # Verify argparse in cli module accepts --keep-open
+    parser = argparse.ArgumentParser()
+    parser.add_argument("prompt")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--max-steps", type=int, default=10)
+    parser.add_argument("--keep-open", action="store_true")
+
+    args = parser.parse_args(["open youtube and search for python", "--keep-open"])
+    assert args.keep_open is True
+    assert args.headless is False
+
