@@ -185,3 +185,114 @@ def test_coding_state_machine_handles_followup_prompts_on_active_domain():
     assert action["action"] == "click"
     assert "two-sum" in action["selector"]
 
+
+def test_coding_state_machine_language_toggle_with_dropdown_options():
+    csm = CodingStateMachine()
+    csm._state = CodingState.SET_LANGUAGE
+    prompt = "solve two sum in python"
+
+    # Stage 1: C++ button is currently visible. CSM should click it once to open the dropdown
+    dom_closed = {
+        "buttons": [
+            {"selector": "button#lang-picker", "text": "C++", "attributes": {}}
+        ],
+        "links": [],
+    }
+    action1 = csm.next_action(
+        user_goal=prompt,
+        dom_state=dom_closed,
+        current_url="https://leetcode.com/problems/two-sum/",
+        recent_actions=[],
+    )
+    assert action1 is not None
+    assert action1["action"] == "click"
+    assert action1["selector"] == "button#lang-picker"
+    assert csm._lang_trigger_clicked is True
+
+    # Stage 2: Dropdown opened, options are visible including Python3
+    dom_open = {
+        "buttons": [
+            {"selector": "button#lang-picker", "text": "C++", "attributes": {}},
+            {"selector": "div[role='option']:has-text('Python3')", "text": "Python3", "attributes": {"role": "option"}},
+        ],
+        "links": [],
+    }
+    action2 = csm.next_action(
+        user_goal=prompt,
+        dom_state=dom_open,
+        current_url="https://leetcode.com/problems/two-sum/",
+        recent_actions=[],
+    )
+    assert action2 is not None
+    assert action2["action"] == "click"
+    assert "Python3" in action2["selector"]
+    assert csm._state == CodingState.SYNTHESIZE_SOLUTION
+
+
+def test_coding_state_machine_skips_toggle_if_already_target_language():
+    csm = CodingStateMachine()
+    csm._state = CodingState.SET_LANGUAGE
+    prompt = "solve two sum in python"
+
+    # Language is already Python3
+    dom_already_python = {
+        "buttons": [
+            {"selector": "button#lang-picker", "text": "Python3", "attributes": {}}
+        ],
+        "links": [],
+    }
+    action = csm.next_action(
+        user_goal=prompt,
+        dom_state=dom_already_python,
+        current_url="https://leetcode.com/problems/two-sum/",
+        recent_actions=[],
+    )
+    # Transitions directly to SYNTHESIZE_SOLUTION and outputs editor_fill
+    assert action is not None
+    assert action["action"] == "editor_fill"
+    assert csm._state == CodingState.INJECT_CODE
+
+
+def test_dom_extractor_button_selectors_include_dropdown_and_menu_roles():
+    from webot.intelligence.dom_extractor import DomExtractor
+    selectors = " ".join(DomExtractor.button_selectors())
+    assert "[role='combobox']" in selectors
+    assert "[role='option']" in selectors
+    assert "[role='menuitem']" in selectors
+
+
+def test_agent_loop_guards_ping_pong_vs_single_page():
+    from webot.workflows.agent_loop import AgentLoop
+
+    loop = AgentLoop(
+        page=MagicMock(),
+        dom_extractor=MagicMock(),
+        decision_engine=MagicMock(),
+        action_executor=MagicMock(),
+        action_validator=MagicMock(),
+        session_memory=MagicMock(),
+        dom_delta=MagicMock(),
+        recovery_engine=MagicMock(),
+    )
+
+    # 4 steps on the SAME URL must NOT trigger navigation ping pong
+    same_page_history = [
+        {"validation": {"details": {"current_url": "https://leetcode.com/problems/two-sum"}}},
+        {"validation": {"details": {"current_url": "https://leetcode.com/problems/two-sum"}}},
+        {"validation": {"details": {"current_url": "https://leetcode.com/problems/two-sum"}}},
+        {"validation": {"details": {"current_url": "https://leetcode.com/problems/two-sum"}}},
+    ]
+    guard = loop._check_loop_guards(history=same_page_history, next_action={"action": "click", "selector": "#btn"})
+    assert guard != "loop_guard_navigation_ping_pong"
+
+    # Genuine oscillation A -> B -> A -> B MUST trigger navigation ping pong
+    ping_pong_history = [
+        {"validation": {"details": {"current_url": "https://site.com/a"}}},
+        {"validation": {"details": {"current_url": "https://site.com/b"}}},
+        {"validation": {"details": {"current_url": "https://site.com/a"}}},
+        {"validation": {"details": {"current_url": "https://site.com/b"}}},
+    ]
+    guard_pp = loop._check_loop_guards(history=ping_pong_history, next_action={"action": "click", "selector": "#btn"})
+    assert guard_pp == "loop_guard_navigation_ping_pong"
+
+

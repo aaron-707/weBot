@@ -32,6 +32,20 @@ class JsonFormatter(logging.Formatter):
         if record.stack_info:
             log_payload["stack"] = self.formatStack(record.stack_info)
 
+        standard_attrs = {
+            "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+            "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+            "created", "msecs", "relativeCreated", "thread", "threadName",
+            "processName", "process", "message", "asctime", "taskName",
+        }
+        for key, val in record.__dict__.items():
+            if key not in standard_attrs and not key.startswith("_"):
+                try:
+                    json.dumps(val)
+                    log_payload[key] = val
+                except (TypeError, OverflowError):
+                    log_payload[key] = str(val)
+
         return json.dumps(log_payload, ensure_ascii=True)
 
 

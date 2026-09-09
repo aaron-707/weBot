@@ -154,13 +154,46 @@ class DomExtractor:
 
                     const name = el.getAttribute('name');
                     if (name) {
-                        return `${el.tagName.toLowerCase()}[name=\"${quoted(name)}\"]`;
+                        return `${el.tagName.toLowerCase()}[name="${quoted(name)}"]`;
+                    }
+
+                    const val = el.getAttribute('data-value') || el.getAttribute('value');
+                    if (val) {
+                        const valSelector = `${el.tagName.toLowerCase()}[data-value="${quoted(val)}"]`;
+                        try {
+                            if (document.querySelectorAll(valSelector).length === 1) return valSelector;
+                        } catch {}
+                    }
+
+                    const ariaLabel = el.getAttribute('aria-label');
+                    if (ariaLabel) {
+                        const ariaSelector = `${el.tagName.toLowerCase()}[aria-label="${quoted(ariaLabel)}"]`;
+                        try {
+                            if (document.querySelectorAll(ariaSelector).length === 1) return ariaSelector;
+                        } catch {}
                     }
 
                     const role = el.getAttribute('role');
                     if (role) {
-                        const roleSelector = `${el.tagName.toLowerCase()}[role=\"${quoted(role)}\"]`;
+                        const roleSelector = `${el.tagName.toLowerCase()}[role="${quoted(role)}"]`;
                         if (document.querySelectorAll(roleSelector).length === 1) return roleSelector;
+
+                        const text = (el.innerText || el.textContent || '').trim();
+                        if (text && text.length <= 40 && !text.includes('\\n')) {
+                            const sameRoleNodes = Array.from(document.querySelectorAll(roleSelector));
+                            const matchingTextNodes = sameRoleNodes.filter(n => (n.innerText || n.textContent || '').trim() === text);
+                            if (matchingTextNodes.length === 1) {
+                                return `${roleSelector}:has-text("${quoted(text)}")`;
+                            }
+                        }
+                    }
+
+                    const text = (el.innerText || el.textContent || '').trim();
+                    if (el.tagName.toLowerCase() === 'button' && text && text.length <= 40 && !text.includes('\\n')) {
+                        const sameButtons = Array.from(document.querySelectorAll('button')).filter(n => (n.innerText || n.textContent || '').trim() === text);
+                        if (sameButtons.length === 1) {
+                            return `button:has-text("${quoted(text)}")`;
+                        }
                     }
 
                     const classes = (el.className || '').toString().trim().split(/\\s+/).filter(Boolean).slice(0, 2);
@@ -266,10 +299,16 @@ class DomExtractor:
 
     @staticmethod
     def button_selectors() -> list[str]:
-        """Primary + fallback selectors for robust button extraction."""
+        """Primary + fallback selectors for robust interactive control extraction."""
         return [
-            # Primary broad selector set.
-            "button, input[type='button'], input[type='submit'], [role='button'], div[role='button']",
+            # Primary broad selector set: buttons, combobox triggers, options, and menu items.
+            (
+                "button, input[type='button'], input[type='submit'], "
+                "[role='button'], div[role='button'], "
+                "[role='combobox'], [aria-haspopup='listbox'], [aria-haspopup='menu'], "
+                "[role='option'], [role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox'], "
+                "[role='tab'], li[role='option']"
+            ),
             # Fallback: common clickable non-semantic controls.
             "a[role='button'], span[role='button'], [aria-pressed], [tabindex='0'][onclick]",
         ]

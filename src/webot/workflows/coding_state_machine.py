@@ -42,6 +42,7 @@ class CodingStateMachine:
     _synthesized_code: str = ""
     _language: str = "python"
     _target_difficulty: str = "easy"
+    _lang_trigger_clicked: bool = False
     _verdict_polls: int = 0
     _max_verdict_polls: int = 5
 
@@ -208,25 +209,62 @@ class CodingStateMachine:
         return None
 
     def _check_and_toggle_language(self, dom_state: dict[str, list[DomElement]]) -> Action | None:
+        target_lang = (self._language or "python").lower()
         known_langs = (
             "c++", "java", "python", "python3", "c", "c#", "javascript", "typescript",
             "php", "swift", "kotlin", "dart", "go", "ruby", "scala", "rust",
         )
-        # 1. Look for an open dropdown option with Python/Python3
-        for item in dom_state.get("buttons", []) + dom_state.get("links", []):
-            text = item.get("text", "").strip().lower()
-            if text in ("python3", "python"):
-                self._transition(CodingState.SYNTHESIZE_SOLUTION)
-                return {"action": "click", "selector": item.get("selector", "button:has-text('Python3')")}
 
-        # 2. Look for the language selector button
-        for btn in dom_state.get("buttons", []):
+        all_interactives = dom_state.get("buttons", []) + dom_state.get("links", [])
+        triggers = []
+        options = []
+        for item in all_interactives:
+            attrs = item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {}
+            role = str(attrs.get("role", "")).lower()
+            if role in ("option", "menuitem", "menuitemradio", "menuitemcheckbox") or "option" in str(item.get("selector", "")).lower():
+                options.append(item)
+            else:
+                triggers.append(item)
+
+        # 1. First, check if the active language trigger already matches target_lang (e.g. "Python3" or "Python")
+        for btn in triggers:
             text = btn.get("text", "").strip().lower()
             if text in known_langs:
-                if text.startswith("python"):
+                if target_lang in text or (target_lang == "python" and "python" in text):
+                    # Already set to the target language!
                     return None
-                # Open language dropdown
-                return {"action": "click", "selector": btn.get("selector")}
+
+        # 2. Look for an open dropdown option or menu item matching target_lang
+        for item in options:
+            text = item.get("text", "").strip().lower()
+            attrs = item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {}
+            val = str(attrs.get("data-value", "") or attrs.get("value", "")).strip().lower()
+            is_match = (
+                text in (target_lang, f"{target_lang}3", f"{target_lang} 3")
+                or val in (target_lang, f"{target_lang}3")
+                or (target_lang == "python" and bool(re.search(r"\bpython3?\b", text)))
+            )
+            if is_match:
+                self._transition(CodingState.SYNTHESIZE_SOLUTION)
+                sel = item.get("selector") or f"[role='option']:has-text('{self._language.capitalize()}')"
+                return {"action": "click", "selector": sel}
+
+        # 3. If we haven't clicked the dropdown trigger yet, click it to open the options
+        if not self._lang_trigger_clicked:
+            for btn in triggers:
+                text = btn.get("text", "").strip().lower()
+                if text in known_langs:
+                    self._lang_trigger_clicked = True
+                    return {"action": "click", "selector": btn.get("selector")}
+
+        # 4. If trigger was already clicked, try clicking target option by role/text directly or advance
+        if self._lang_trigger_clicked:
+            self._transition(CodingState.SYNTHESIZE_SOLUTION)
+            lang_label = "Python3" if target_lang == "python" else self._language.capitalize()
+            return {
+                "action": "click",
+                "selector": f"[role='option']:has-text('{lang_label}'), [role='menuitem']:has-text('{lang_label}'), button:has-text('{lang_label}')",
+            }
 
         return None
 

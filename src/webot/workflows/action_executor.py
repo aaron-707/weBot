@@ -134,7 +134,9 @@ class ActionExecutor:
             return {"url": action["url"]}
 
         if action_name == "click":
-            await self.browser_controller.click(action["selector"])
+            res = await self.browser_controller.click(action["selector"])
+            if isinstance(res, dict) and not res.get("ok", True):
+                raise RuntimeError(res.get("error") or f"Click failed for {action['selector']}")
             page = getattr(self.browser_controller, "page", None)
             if page is not None and any(k in action["selector"].lower() for k in ("search", "submit")):
                 try:

@@ -73,11 +73,21 @@ class BrowserController:
 
     async def click(self, selector: str) -> dict[str, bool | str | None]:
         try:
-            await self.page.click(selector)
+            loc = self.page.locator(selector).first
+            try:
+                await loc.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
+            await loc.click(timeout=5000)
             return {"ok": True, "error": None}
         except Exception as exc:  # noqa: BLE001
-            logger.warning("click_failed", extra={"selector": selector, "error": str(exc)})
-            return {"ok": False, "error": str(exc)}
+            try:
+                loc = self.page.locator(selector).first
+                await loc.click(force=True, timeout=3000)
+                return {"ok": True, "error": None}
+            except Exception as force_exc:
+                logger.warning("click_failed", extra={"selector": selector, "error": str(force_exc)})
+                return {"ok": False, "error": str(force_exc)}
 
     async def fill(self, selector: str, value: str) -> dict[str, bool | str | None]:
         try:

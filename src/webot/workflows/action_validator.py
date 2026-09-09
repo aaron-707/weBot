@@ -43,7 +43,9 @@ class ActionValidator:
             if action_type == "goto":
                 result = await self._validate_goto(page=page, action=action, before_state=before_state)
             elif action_type == "click":
-                result = await self._validate_click(page=page, action=action, before_state=before_state)
+                result = await self._validate_click(
+                    page=page, action=action, before_state=before_state, action_result=action_result
+                )
             elif action_type == "fill":
                 result = await self._validate_fill(page=page, action=action, before_state=before_state)
             elif action_type == "submit":
@@ -119,12 +121,14 @@ class ActionValidator:
         page: Page,
         action: dict[str, Any],
         before_state: dict[str, Any] | None,
+        action_result: dict[str, Any] | None = None,
     ) -> ValidationResult:
         selector = str(action.get("selector", "")).strip()
         previous_url = str((before_state or {}).get("url", "")).strip()
         previous_dom_count = self._safe_int((before_state or {}).get("dom_count"), default=-1)
         previous_modal_count = self._safe_int((before_state or {}).get("modal_count"), default=-1)
         previous_enabled = (before_state or {}).get("element_enabled")
+        previous_visible = (before_state or {}).get("element_visible")
 
         after = await self.capture_state(page=page, selector=selector if selector else None)
         current_url = str(after.get("url", ""))
@@ -143,7 +147,13 @@ class ActionValidator:
         if isinstance(previous_enabled, bool) and isinstance(after.get("element_enabled"), bool):
             button_state_changed = bool(after["element_enabled"]) != previous_enabled
 
-        success = navigation_occurred or dom_changed or modal_changed or button_state_changed
+        visibility_changed = False
+        if isinstance(previous_visible, bool) and isinstance(after.get("element_visible"), bool):
+            visibility_changed = bool(after["element_visible"]) != previous_visible
+
+        action_succeeded = bool(action_result.get("success", False)) if isinstance(action_result, dict) else False
+        observable_change = navigation_occurred or dom_changed or modal_changed or button_state_changed or visibility_changed
+        success = observable_change or action_succeeded
         reason = "click_validated" if success else "click_no_observable_change"
 
         return {
@@ -157,6 +167,8 @@ class ActionValidator:
                 "dom_changed": dom_changed,
                 "modal_changed": modal_changed,
                 "button_state_changed": button_state_changed,
+                "visibility_changed": visibility_changed,
+                "action_succeeded": action_succeeded,
                 "before": before_state or {},
                 "after": after,
             },
@@ -363,6 +375,7 @@ class ActionValidator:
         if selector:
             state["selector"] = selector
             state["element_enabled"] = await self._is_element_enabled(page, selector)
+            state["element_visible"] = await self._is_element_visible(page, selector)
         return state
 
     async def _wait_page_loaded(self, page: Page) -> bool:
@@ -442,6 +455,15 @@ class ActionValidator:
             return await locator.is_enabled()
 
         return await self._with_timeout(_enabled(), fallback=None)
+
+    async def _is_element_visible(self, page: Page, selector: str) -> bool | None:
+        async def _visible() -> bool | None:
+            locator = page.locator(selector).first
+            if await locator.count() == 0:
+                return False
+            return await locator.is_visible()
+
+        return await self._with_timeout(_visible(), fallback=None)
 
     async def _with_timeout(self, awaitable: Any, *, fallback: Any) -> Any:
         try:

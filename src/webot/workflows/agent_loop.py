@@ -751,7 +751,7 @@ class AgentLoop:
             url = details.get("current_url")
             if isinstance(url, str):
                 urls.append(url.rstrip("/"))
-        if len(urls) >= 4 and urls[-1] == urls[-3] and urls[-2] == urls[-4]:
+        if len(urls) >= 4 and urls[-1] == urls[-3] and urls[-2] == urls[-4] and urls[-1] != urls[-2]:
             return "loop_guard_navigation_ping_pong"
 
         anti_bot_count = 0
