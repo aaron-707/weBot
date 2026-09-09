@@ -434,7 +434,7 @@ class DecisionEngine:
         language: str = "python",
     ) -> str:
         """Synthesize a complete code solution conforming to starter_code signature."""
-        logger = get_logger(__name__)
+        logger = logging.getLogger(__name__)
         if not self.ollama_client or not self.ollama_client.is_available():
             return starter_code or "# Solution placeholder"
 
@@ -455,13 +455,22 @@ class DecisionEngine:
             self.llm_consulted_count += 1
             logger.info("decision_engine_synthesizing_code", extra={"language": language})
             raw = self.ollama_client.generate(prompt)
-            code = self._strip_code_fence(raw).strip()
-            lines = code.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            cleaned_code = "\n".join(lines).strip()
+            fence_match = re.search(r"```(?:python|py)?\s*(.*?)\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
+            if fence_match:
+                cleaned_code = fence_match.group(1).strip()
+            else:
+                lines = raw.strip().splitlines()
+                code_lines = []
+                capturing = False
+                for line in lines:
+                    if line.strip().startswith(("class ", "def ", "import ", "from ")):
+                        capturing = True
+                    if capturing:
+                        if line.strip().startswith("```"):
+                            break
+                        code_lines.append(line)
+                cleaned_code = "\n".join(code_lines).strip() if code_lines else raw.strip()
+
             return cleaned_code or starter_code
         except Exception as exc:
             logger.warning("code_synthesis_failed", extra={"error": str(exc)})
