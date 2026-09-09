@@ -208,13 +208,16 @@ async def run_prompt(
             if not next_prompt:
                 break
 
-            next_site = interpreter.extract_start_url(next_prompt)
-            if next_site:
-                curr_host = urlparse(browser.page.url).netloc.lower()
-                target_host = urlparse(next_site).netloc.lower()
-                if curr_host != target_host and not curr_host.endswith("." + target_host) and not target_host.endswith("." + curr_host):
-                    logger.info("navigating_to_requested_site", extra={"url": next_site})
-                    await browser.goto(next_site)
+            # Only navigate if the follow-up explicitly requests navigation
+            has_nav_intent = bool(re.search(r"\b(open|go\s+to|goto|navigate\s+to|visit|https?://)\b", next_prompt, re.IGNORECASE))
+            if has_nav_intent:
+                next_site = interpreter.extract_start_url(next_prompt)
+                if next_site:
+                    curr_host = urlparse(browser.page.url).netloc.lower()
+                    target_host = urlparse(next_site).netloc.lower()
+                    if curr_host != target_host and not curr_host.endswith("." + target_host) and not target_host.endswith("." + curr_host):
+                        logger.info("navigating_to_requested_site", extra={"url": next_site})
+                        await browser.goto(next_site)
 
             sub_tracker = ProgressTracker(window_size=20)
             sub_loop = AgentLoop(

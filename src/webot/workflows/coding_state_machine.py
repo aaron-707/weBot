@@ -19,6 +19,7 @@ class CodingState(str, Enum):
     NAVIGATE_TO_PLATFORM = "navigate_to_platform"
     SELECT_PROBLEM = "select_problem"
     EXTRACT_PROBLEM_SPEC = "extract_problem_spec"
+    SET_LANGUAGE = "set_language"
     SYNTHESIZE_SOLUTION = "synthesize_solution"
     INJECT_CODE = "inject_code"
     SUBMIT_CODE = "submit_code"
@@ -97,10 +98,17 @@ class CodingStateMachine:
         # State 3: EXTRACT_PROBLEM_SPEC
         if self._state == CodingState.EXTRACT_PROBLEM_SPEC:
             selector = self._find_description_selector(dom_state)
-            self._transition(CodingState.SYNTHESIZE_SOLUTION)
+            self._transition(CodingState.SET_LANGUAGE)
             return {"action": "extract_text", "selector": selector}
 
-        # State 4: SYNTHESIZE_SOLUTION
+        # State 4: SET_LANGUAGE
+        if self._state == CodingState.SET_LANGUAGE:
+            lang_action = self._check_and_toggle_language(dom_state)
+            if lang_action:
+                return lang_action
+            self._transition(CodingState.SYNTHESIZE_SOLUTION)
+
+        # State 5: SYNTHESIZE_SOLUTION
         if self._state == CodingState.SYNTHESIZE_SOLUTION:
             for act in reversed(recent_actions):
                 if act.get("action") == "extract_text" and act.get("data"):
@@ -198,6 +206,30 @@ class CodingStateMachine:
             if "submit" in text or "console-submit-button" in e2e:
                 return btn.get("selector")
         return None
+
+    def _check_and_toggle_language(self, dom_state: dict[str, list[DomElement]]) -> Action | None:
+        known_langs = (
+            "c++", "java", "python", "python3", "c", "c#", "javascript", "typescript",
+            "php", "swift", "kotlin", "dart", "go", "ruby", "scala", "rust",
+        )
+        # 1. Look for an open dropdown option with Python/Python3
+        for item in dom_state.get("buttons", []) + dom_state.get("links", []):
+            text = item.get("text", "").strip().lower()
+            if text in ("python3", "python"):
+                self._transition(CodingState.SYNTHESIZE_SOLUTION)
+                return {"action": "click", "selector": item.get("selector", "button:has-text('Python3')")}
+
+        # 2. Look for the language selector button
+        for btn in dom_state.get("buttons", []):
+            text = btn.get("text", "").strip().lower()
+            if text in known_langs:
+                if text.startswith("python"):
+                    return None
+                # Open language dropdown
+                return {"action": "click", "selector": btn.get("selector")}
+
+        return None
+
 
     def _detect_verdict(self, dom_state: dict[str, list[DomElement]], recent_actions: list[dict[str, Any]]) -> str | None:
         for act in reversed(recent_actions):
