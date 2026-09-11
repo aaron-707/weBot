@@ -296,3 +296,88 @@ def test_agent_loop_guards_ping_pong_vs_single_page():
     assert guard_pp == "loop_guard_navigation_ping_pong"
 
 
+def test_coding_state_machine_ignores_multiline_container_in_language_selection():
+    csm = CodingStateMachine()
+    csm._state = CodingState.SET_LANGUAGE
+    csm._lang_trigger_clicked = True
+    prompt = "open leetcode and solve two sum in python and submit"
+
+    # DOM state contains a multiline container text that includes Python3 and Ruby
+    dom_state = {
+        "buttons": [
+            {"selector": "button#lang-picker", "text": "C++", "attributes": {}}
+        ],
+        "links": [],
+        "visible_text": [
+            {
+                "selector": "html > body > div:nth-of-type(8)",
+                "text": "C++\nJava\nPython\nPython3\nRuby\nGo\nRust",
+                "attributes": {},
+            }
+        ],
+    }
+
+    action = csm.next_action(
+        user_goal=prompt,
+        dom_state=dom_state,
+        current_url="https://leetcode.com/problems/two-sum/",
+        recent_actions=[],
+    )
+
+    assert action is not None
+    assert action["action"] == "click"
+    # Must NOT click the container div
+    assert action["selector"] != "html > body > div:nth-of-type(8)"
+    # Must target Python3 leaf selector
+    assert "Python3" in action["selector"]
+
+
+def test_coding_state_machine_detects_login_required_verdict():
+    csm = CodingStateMachine()
+    csm._state = CodingState.VERIFY_VERDICT
+    prompt = "open leetcode and solve two sum in python and submit"
+
+    dom_state = {
+        "buttons": [],
+        "links": [],
+        "visible_text": [
+            {
+                "selector": "div.login-prompt",
+                "text": "You need to log in / sign up to run or submit",
+                "attributes": {},
+            }
+        ],
+    }
+
+    action = csm.next_action(
+        user_goal=prompt,
+        dom_state=dom_state,
+        current_url="https://leetcode.com/problems/two-sum/",
+        recent_actions=[],
+    )
+
+    assert action is not None
+    assert csm._state == CodingState.COMPLETED
+
+
+def test_decision_engine_python_prompt_includes_class_solution():
+    from webot.llm.decision_engine import DecisionEngine
+
+    mock_client = MagicMock()
+    mock_client.is_available.return_value = True
+    mock_client.generate.return_value = "class Solution:\n    def twoSum(self, nums, target):\n        return []"
+
+    de = DecisionEngine(ollama_client=mock_client)
+    res = de.synthesize_code_solution(
+        problem_description="Given an array of integers nums and an integer target...",
+        starter_code="",
+        language="python",
+    )
+
+    assert "class Solution:" in res
+    mock_client.generate.assert_called_once()
+    called_prompt = mock_client.generate.call_args[0][0]
+    assert "class Solution:" in called_prompt
+
+
+

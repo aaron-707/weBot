@@ -141,7 +141,7 @@ class ActionExecutor:
             if page is not None:
                 try:
                     if any(k in action["selector"].lower() for k in ("search", "submit")):
-                        await page.wait_for_timeout(1000)
+                        await page.wait_for_timeout(2000)
                     else:
                         await page.wait_for_timeout(300)
                 except Exception:

@@ -251,11 +251,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="weBot: run a free-text browser task autonomously.")
     parser.add_argument("prompt", nargs="?", default="", help="Natural-language task, e.g. 'search for X on duckduckgo'")
     parser.add_argument("--headless", action="store_true", help="Run without a visible browser window")
-    parser.add_argument("--max-steps", type=int, default=10)
+    parser.add_argument("--max-steps", type=int, default=25)
     parser.add_argument(
         "--keep-open",
-        action="store_true",
-        help="Keep the browser window open after task completion for consecutive prompts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the browser window open after task completion for inspection or follow-up prompts (default: True)",
     )
     parser.add_argument(
         "--cdp",

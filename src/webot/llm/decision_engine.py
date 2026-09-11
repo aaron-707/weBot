@@ -444,8 +444,15 @@ class DecisionEngine:
             f"Requirements:\n"
             f"1. Conforming to the starter code signature provided below.\n"
             f"2. Return ONLY the executable {language} code.\n"
-            f"3. Do NOT include markdown code blocks, backticks, or conversational explanations.\n\n"
-            f"Problem Description:\n{problem_description[:2000]}\n\n"
+            f"3. Do NOT include markdown code blocks, backticks, or conversational explanations.\n"
+        )
+        if language.lower() == "python":
+            prompt += (
+                "4. For online judge platforms (e.g. LeetCode), wrap your solution in standard `class Solution:` "
+                "with the required method and types.\n"
+            )
+        prompt += (
+            f"\nProblem Description:\n{problem_description[:2000]}\n\n"
         )
         if starter_code.strip():
             prompt += f"Starter Code Template:\n{starter_code[:1000]}\n\n"

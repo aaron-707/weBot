@@ -116,31 +116,16 @@ class CodingStateMachine:
 
         # State 5: SYNTHESIZE_SOLUTION
         if self._state == CodingState.SYNTHESIZE_SOLUTION:
-            for act in reversed(recent_actions):
-                if act.get("action") == "extract_text" and act.get("data"):
-                    data = act["data"]
-                    if isinstance(data, dict) and data.get("text"):
-                        self._problem_description = data["text"]
-                        break
-                    elif isinstance(data, str):
-                        self._problem_description = data
-                        break
-
-            if not self._problem_description:
-                self._problem_description = f"LeetCode problem on {current_url}. Difficulty: {self._target_difficulty}."
-
-            logger.info("synthesizing_solution", extra={"language": self._language, "desc_len": len(self._problem_description)})
-            if self.decision_engine is not None:
-                self._synthesized_code = self.decision_engine.synthesize_code_solution(
-                    problem_description=self._problem_description,
-                    starter_code=self._starter_code,
+            self._transition(CodingState.INJECT_CODE)
+            prob_desc = self._get_last_extracted_text(recent_actions) or user_goal
+            solution_code = self._default_solution(self._language)
+            if self.decision_engine:
+                solution_code = self.decision_engine.synthesize_code_solution(
+                    problem_description=prob_desc,
+                    starter_code=self._starter_code or self._default_solution(self._language),
                     language=self._language,
                 )
-            else:
-                self._synthesized_code = self._default_solution(self._language)
-
-            self._transition(CodingState.INJECT_CODE)
-            return {"action": "editor_fill", "value": self._synthesized_code}
+            return {"action": "editor_fill", "value": solution_code}
 
         # State 5: INJECT_CODE
         if self._state == CodingState.INJECT_CODE:
@@ -164,6 +149,10 @@ class CodingStateMachine:
             elif verdict in {"wrong_answer", "error"}:
                 self._transition(CodingState.FAILED, failed=True, reason=f"verdict_{verdict}")
                 return {"action": "extract_text", "selector": "body"}
+            elif verdict == "requires_login":
+                self._transition(CodingState.COMPLETED, completed=True)
+                logger.info("submission_requires_login", extra={"machine": "coding", "reason": "site requires login to submit"})
+                return {"action": "extract_text", "selector": "body"}
 
             self._verdict_polls += 1
             if self._verdict_polls >= self._max_verdict_polls:
@@ -183,6 +172,16 @@ class CodingStateMachine:
             logger.info("state_completed", extra={"machine": "coding", "state": state.value})
         if failed:
             logger.warning("state_failed", extra={"machine": "coding", "state": state.value, "reason": reason})
+
+    def _get_last_extracted_text(self, recent_actions: list[dict[str, Any]]) -> str:
+        for act in reversed(recent_actions):
+            if act.get("action") == "extract_text" and act.get("data"):
+                data = act["data"]
+                if isinstance(data, dict) and data.get("text"):
+                    return str(data["text"])
+                elif isinstance(data, str):
+                    return data
+        return ""
 
     def _find_problem_link(self, dom_state: dict[str, list[DomElement]]) -> Action | None:
         links = dom_state.get("links", [])
@@ -219,6 +218,9 @@ class CodingStateMachine:
             "c++", "java", "python", "python3", "c", "c#", "javascript", "typescript",
             "php", "swift", "kotlin", "dart", "go", "ruby", "scala", "rust",
         )
+        candidate_labels = {target_lang, f"{target_lang}3", f"{target_lang} 3"}
+        if target_lang == "python":
+            candidate_labels.update({"python3", "python 3", "py3"})
 
         all_interactives = dom_state.get("buttons", []) + dom_state.get("links", [])
         triggers = []
@@ -231,10 +233,21 @@ class CodingStateMachine:
             else:
                 triggers.append(item)
 
-        # Also check visible text items when looking for candidate language options
+        def is_leaf_option(text: str, val: str) -> bool:
+            if not text and not val:
+                return False
+            if "\n" in text or len(text) > 30:
+                return False
+            clean_text = text.strip().lower()
+            clean_val = val.strip().lower()
+            return clean_text in candidate_labels or clean_val in candidate_labels
+
+        # Only add visible_text if it is a concise single-line leaf option
         for item in dom_state.get("visible_text", []):
-            text = item.get("text", "").strip().lower()
-            if text in (target_lang, f"{target_lang}3", f"{target_lang} 3") or (target_lang == "python" and bool(re.search(r"\bpython3?\b", text))):
+            text = item.get("text", "")
+            attrs = item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {}
+            val = str(attrs.get("data-value", "") or attrs.get("value", ""))
+            if is_leaf_option(text, val):
                 options.append(item)
 
         # 1. First, check if the active language trigger already matches target_lang (e.g. "Python3" or "Python")
@@ -245,19 +258,27 @@ class CodingStateMachine:
                     # Already set to the target language!
                     return None
 
+        lang_label = "Python3" if target_lang == "python" else self._language.capitalize()
+        universal_lang_selector = (
+            f":text-is('{lang_label}'), "
+            f"div:text-is('{lang_label}'), "
+            f"span:text-is('{lang_label}'), "
+            f"li:text-is('{lang_label}'), "
+            f"[role='option']:has-text('{lang_label}'), "
+            f"[role='menuitem']:has-text('{lang_label}'), "
+            f"button:has-text('{lang_label}')"
+        )
+
         # 2. Look for an open dropdown option or menu item matching target_lang
         for item in options:
-            text = item.get("text", "").strip().lower()
+            text = item.get("text", "")
             attrs = item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {}
-            val = str(attrs.get("data-value", "") or attrs.get("value", "")).strip().lower()
-            is_match = (
-                text in (target_lang, f"{target_lang}3", f"{target_lang} 3")
-                or val in (target_lang, f"{target_lang}3")
-                or (target_lang == "python" and bool(re.search(r"\bpython3?\b", text)))
-            )
-            if is_match:
+            val = str(attrs.get("data-value", "") or attrs.get("value", ""))
+            if is_leaf_option(text, val):
                 self._transition(CodingState.SYNTHESIZE_SOLUTION)
-                sel = item.get("selector") or f":text-is('{self._language.capitalize()}')"
+                sel = item.get("selector")
+                if not sel or (":nth-of-type" in sel and not any(tag in sel for tag in ("option", "menuitem", "#"))):
+                    sel = universal_lang_selector
                 return {"action": "click", "selector": sel}
 
         # 3. If we haven't clicked the dropdown trigger yet, click it to open the options
@@ -271,37 +292,44 @@ class CodingStateMachine:
         # 4. If trigger was already clicked, try clicking target option by role/text directly or advance
         if self._lang_trigger_clicked:
             self._transition(CodingState.SYNTHESIZE_SOLUTION)
-            lang_label = "Python3" if target_lang == "python" else self._language.capitalize()
             return {
                 "action": "click",
-                "selector": (
-                    f":text-is('{lang_label}'), "
-                    f"div:text-is('{lang_label}'), "
-                    f"span:text-is('{lang_label}'), "
-                    f"li:text-is('{lang_label}'), "
-                    f"[role='option']:has-text('{lang_label}'), "
-                    f"[role='menuitem']:has-text('{lang_label}'), "
-                    f"button:has-text('{lang_label}')"
-                ),
+                "selector": universal_lang_selector,
             }
 
         return None
 
-
     def _detect_verdict(self, dom_state: dict[str, list[DomElement]], recent_actions: list[dict[str, Any]]) -> str | None:
+        all_texts: list[str] = []
         for act in reversed(recent_actions):
             data = act.get("data")
-            text = ""
             if isinstance(data, dict):
-                text = str(data.get("text", ""))
+                all_texts.append(str(data.get("text", "")))
             elif isinstance(data, str):
-                text = data
-            if "Accepted" in text:
+                all_texts.append(data)
+
+        for item in dom_state.get("visible_text", []):
+            t = item.get("text", "").strip()
+            if t:
+                all_texts.append(t)
+
+        for text in all_texts:
+            lower = text.lower()
+            if "accepted" in lower:
                 return "accepted"
-            if "Wrong Answer" in text:
+            if "wrong answer" in lower:
                 return "wrong_answer"
-            if "Runtime Error" in text or "Compile Error" in text:
+            if "runtime error" in lower or "compile error" in lower or "time limit exceeded" in lower or "memory limit exceeded" in lower:
                 return "error"
+            if (
+                "to run or submit" in lower
+                or "sign in to submit" in lower
+                or "log in / sign up" in lower
+                or "login to submit" in lower
+                or "log in to run" in lower
+            ):
+                return "requires_login"
+
         return None
 
     @staticmethod
