@@ -380,4 +380,97 @@ def test_decision_engine_python_prompt_includes_class_solution():
     assert "class Solution:" in called_prompt
 
 
+def test_deterministic_action_skips_goto_when_already_on_url():
+    """Verify _deterministic_action does NOT emit a goto when the URL in the goal
+    matches the current page URL."""
+    from webot.workflows.agent_loop import AgentLoop
 
+    dom_state = {"inputs": [], "buttons": [], "links": [], "visible_text": []}
+
+    # Case 1: explicit URL in goal matches current_url — should return None
+    action = AgentLoop._deterministic_action(
+        user_goal="i want you to go to https://flappybird.io/ and play the game",
+        dom_state=dom_state,
+        step=1,
+        recent_actions=[],
+        failures=[],
+        current_url="https://flappybird.io/",
+    )
+    assert action is None or action.get("action") != "goto", (
+        f"Should NOT emit goto to current URL, got: {action}"
+    )
+
+    # Case 2: bare domain in goal matches current_url — should return None
+    action2 = AgentLoop._deterministic_action(
+        user_goal="go to flappybird.io and play",
+        dom_state=dom_state,
+        step=1,
+        recent_actions=[],
+        failures=[],
+        current_url="https://flappybird.io/",
+    )
+    assert action2 is None or action2.get("action") != "goto", (
+        f"Should NOT emit goto to current URL, got: {action2}"
+    )
+
+    # Case 3: different URL — should return goto
+    action3 = AgentLoop._deterministic_action(
+        user_goal="go to https://flappybird.io/ and play",
+        dom_state=dom_state,
+        step=1,
+        recent_actions=[],
+        failures=[],
+        current_url="https://example.com/",
+    )
+    assert action3 is not None
+    assert action3["action"] == "goto"
+    assert "flappybird.io" in action3["url"]
+
+
+def test_llm_suggested_goto_to_current_url_is_suppressed():
+    """Verify _select_next_action suppresses LLM-suggested goto to the current URL."""
+    from webot.workflows.agent_loop import AgentLoop
+
+    mock_page = MagicMock()
+    mock_page.url = "https://flappybird.io/"
+
+    mock_decision_engine = MagicMock()
+    mock_decision_engine.choose_next_action.return_value = {
+        "action": "goto",
+        "url": "https://flappybird.io/",
+    }
+
+    loop = AgentLoop(
+        page=mock_page,
+        dom_extractor=MagicMock(),
+        decision_engine=mock_decision_engine,
+        action_executor=MagicMock(),
+        action_validator=MagicMock(),
+        session_memory=MagicMock(),
+        dom_delta=MagicMock(),
+        recovery_engine=MagicMock(),
+        llm_enabled=True,
+    )
+
+    dom_state = {"inputs": [], "buttons": [], "links": [], "visible_text": []}
+    delta = {
+        "navigation_changed": False,
+        "new_elements": [],
+        "removed_elements": [],
+        "changed_text": [],
+        "form_state_changes": [],
+    }
+
+    action = loop._select_next_action(
+        user_goal="play flappy bird",
+        dom_state=dom_state,
+        delta=delta,
+        recent_actions=[],
+        failures=[],
+        step=2,
+    )
+
+    # Should be extract_text, not goto
+    assert action["action"] == "extract_text", (
+        f"LLM goto to current URL should be suppressed, got: {action}"
+    )

@@ -197,7 +197,16 @@ async def run_prompt(
         (out_dir / "last_run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
         while keep_open and not headless:
-            curr_url = browser.page.url
+            # Guard: check if browser page is still alive
+            try:
+                if browser.page.is_closed():
+                    print("[weBot] Browser page was closed. Exiting.")
+                    break
+                curr_url = browser.page.url
+            except Exception:
+                print("[weBot] Browser connection lost. Exiting.")
+                break
+
             print(f"\n[weBot] Active URL: {curr_url}")
             try:
                 next_prompt = await asyncio.to_thread(
@@ -218,8 +227,17 @@ async def run_prompt(
                     target_host = urlparse(next_site).netloc.lower()
                     if curr_host != target_host and not curr_host.endswith("." + target_host) and not target_host.endswith("." + curr_host):
                         logger.info("navigating_to_requested_site", extra={"url": next_site})
-                        await browser.goto(next_site)
+                        nav_result = await browser.goto(next_site)
+                        if isinstance(nav_result, dict) and not nav_result.get("ok", True):
+                            err_msg = nav_result.get("error", "")
+                            if "closed" in str(err_msg).lower():
+                                print(f"[weBot] Browser closed unexpectedly: {err_msg}")
+                                break
+                            logger.warning("follow_up_navigation_failed", extra={"url": next_site, "error": err_msg})
 
+            # Create fresh session state for each follow-up task
+            follow_up_memory = SessionMemory(max_actions=400)
+            follow_up_delta = DomDelta(max_items_per_bucket=12)
             sub_tracker = ProgressTracker(window_size=20)
             sub_loop = AgentLoop(
                 page=browser.page,
@@ -227,8 +245,8 @@ async def run_prompt(
                 decision_engine=decision_engine,
                 action_executor=action_executor,
                 action_validator=action_validator,
-                session_memory=session_memory,
-                dom_delta=dom_delta,
+                session_memory=follow_up_memory,
+                dom_delta=follow_up_delta,
                 recovery_engine=recovery_engine,
                 max_steps=max_steps,
                 max_consecutive_failures=3,
@@ -238,13 +256,25 @@ async def run_prompt(
                 progress_tracker=sub_tracker,
                 goal_evaluator=goal_evaluator,
             )
-            sub_result = await sub_loop.run(next_prompt)
-            sub_status = sub_result.get("status") if isinstance(sub_result, dict) else "unknown"
-            print(f"[weBot] Task status: {sub_status}")
+
+            try:
+                sub_result = await sub_loop.run(next_prompt)
+                sub_status = sub_result.get("status") if isinstance(sub_result, dict) else "unknown"
+                print(f"[weBot] Task status: {sub_status}")
+            except Exception as exc:
+                err_str = str(exc).lower()
+                if "closed" in err_str or "target" in err_str:
+                    print(f"[weBot] Browser closed during task: {exc}")
+                    break
+                logger.warning("follow_up_task_failed", extra={"error": str(exc)})
+                print(f"[weBot] Task failed: {exc}")
 
         return summary
     finally:
-        await browser.close()
+        try:
+            await browser.close()
+        except Exception:
+            pass
 
 
 def main() -> None:

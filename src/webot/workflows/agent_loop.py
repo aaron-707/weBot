@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypedDict
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from playwright.async_api import Page
 
@@ -411,6 +411,19 @@ class AgentLoop:
         try:
             suggested = self.decision_engine.choose_next_action(compact_goal, flattened)
             normalized = self._normalize_action(suggested)
+            # Suppress goto to the URL we're already on
+            if normalized.get("action") == "goto" and isinstance(normalized.get("url"), str):
+                suggested_url = normalized["url"]
+                current_url = self.page.url
+                if (
+                    urlparse(current_url).netloc.lower() == urlparse(suggested_url).netloc.lower()
+                    and urlparse(current_url).path.rstrip("/") == urlparse(suggested_url).path.rstrip("/")
+                ):
+                    get_logger(__name__).info(
+                        "suppressed_same_url_goto",
+                        extra={"step": step, "url": suggested_url},
+                    )
+                    normalized = {"action": "extract_text", "selector": "body"}
             get_logger(__name__).info("strategy_pivot", extra={"step": step, "strategy": "decision_engine", "action": normalized})
             if normalized.get("action") == "extract_text":
                 self.degraded_mode = True
@@ -526,9 +539,14 @@ class AgentLoop:
             for token in lowered_goal.split():
                 candidate = token.strip(".,)")
                 if candidate.startswith("http://") or candidate.startswith("https://"):
+                    if current_url and urlparse(current_url).netloc.lower() == urlparse(candidate).netloc.lower() and urlparse(current_url).path.rstrip("/") == urlparse(candidate).path.rstrip("/"):
+                        break  # Already on this URL, skip goto
                     return {"action": "goto", "url": candidate}
                 if any(candidate.endswith(s) for s in (".com", ".org", ".net", ".io", ".ai")):
-                    return {"action": "goto", "url": f"https://{candidate}"}
+                    full_url = f"https://{candidate}"
+                    if current_url and urlparse(current_url).netloc.lower() == urlparse(full_url).netloc.lower():
+                        break  # Already on this URL, skip goto
+                    return {"action": "goto", "url": full_url}
 
         # Deterministic button click for clear goal keywords.
         goal = lowered_goal
